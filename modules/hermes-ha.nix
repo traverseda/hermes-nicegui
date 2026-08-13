@@ -176,6 +176,15 @@ in
       terminal.backend = "local";
       # The ha profile shares the default listener — never bind its own port.
       platforms.api_server.enabled = false;
+      # ── Kanban ticketing ─────────────────────────────────────────────
+      # The ha profile files tickets instead of doing infra work itself. The
+      # api_server platform drops kanban from its default composite
+      # (`hermes-api-server`), so it must be listed explicitly to reach the
+      # session schema, AND `toolsets: [kanban]` must be present for the
+      # kanban tools' check_fn to pass in normal (non-worker) sessions — the
+      # `all`/`*` wildcard deliberately does not enable kanban.
+      platform_toolsets.api_server = [ "hermes-api-server" "kanban" ];
+      toolsets = [ "kanban" ];
     };
 
     # ── Reverse proxy (the "separate port") ────────────────────────────
@@ -241,6 +250,12 @@ in
       mkdir -p "${lib.escapeShellArg cfg.workingDirectory}"
       chown ${agent.user}:${agent.group} "${lib.escapeShellArg cfg.workingDirectory}"
       chmod 2770 "${lib.escapeShellArg cfg.workingDirectory}"
+
+      # Ticketing policy — always-on project context for ha sessions, so the
+      # profile opens a ticket instead of attempting out-of-lane work.
+      install -o ${agent.user} -g ${agent.group} -m 0644 \
+        ${./ticketing/ha-hermes.md} \
+        "${lib.escapeShellArg (cfg.workingDirectory + "/.hermes.md")}"
 
       touch "${lib.escapeShellArg (profileHome + "/.managed")}"
       chown ${agent.user}:${agent.group} "${lib.escapeShellArg (profileHome + "/.managed")}"

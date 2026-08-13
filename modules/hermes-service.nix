@@ -52,6 +52,32 @@ in
 
         # High-value state: back up HERMES_HOME before any update.
         updates.pre_update_backup = "full";
+
+        # ── Kanban ticketing ────────────────────────────────────────────
+        # The default profile is the work executor for tickets filed by the
+        # `ha` profile (and by itself). The dispatcher runs inside the gateway
+        # (kanban.dispatch_in_gateway). Triage tasks are NOT auto-decomposed,
+        # so nothing fans out into surprise LLM work; tasks only run when an
+        # agent files them with an explicit assignee (or you triage them).
+        # auto_subscribe_on_create wakes the ticket's origin session when the
+        # task reaches a terminal event, so the ha profile learns the outcome.
+        kanban.dispatch_in_gateway = true;
+        kanban.auto_decompose = false;
+        kanban.auto_subscribe_on_create = true;
+        # Orchestrator toolset. `toolsets: [kanban]` is required for the
+        # kanban tools' check_fn to pass in normal (non-worker) sessions —
+        # the `all`/`*` wildcard deliberately does not enable kanban. The
+        # api_server platform drops kanban from its default composite, so it
+        # must be listed explicitly there too.
+        toolsets = [ "kanban" ];
+        platform_toolsets.api_server = [ "hermes-api-server" "kanban" ];
+      };
+
+      # Workspace policy: always-on "file a ticket instead" rules for the
+      # default profile's own sessions (workers get separate kanban guidance
+      # injected by the dispatcher + the `ticketing` skill on their task).
+      documents = {
+        ".hermes.md" = builtins.readFile ./ticketing/default-hermes.md;
       };
 
       # Tools the agent may invoke through its terminal toolset.
