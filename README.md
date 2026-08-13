@@ -176,3 +176,10 @@ run under rootful podman via `virtualisation.oci-containers`.
 
 Other tools on the tailnet can point a `HindsightClient` at
 `http://<tailscale-ip>:8888`.
+
+**OpenCode is wired in** via the repo's `opencode.json`: the
+`@vectorize-io/opencode-hindsight` plugin points at
+`http://hermesagent.lan:8888` with bank `code` (replacing the global remote
+`hindsight-api.0u0.ca` endpoint). The API key is not in the config — export
+`HINDSIGHT_API_TOKEN` (same value as `HINDSIGHT_API_TENANT_API_KEY` in
+`hindsight-env`) in the shell before launching opencode.
