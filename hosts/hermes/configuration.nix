@@ -33,6 +33,17 @@
   services.hermes-agent = {
     stateDir = "/var/lib/hermes";
     workingDirectory = "/var/lib/hermes/workspace";
+
+    # Official Hindsight memory provider (bundled with hermes-agent; selected
+    # via the `memory.provider` config key). Points at the local Hindsight
+    # service below. The API key lives in the hermes-env secret
+    # (HINDSIGHT_API_KEY = the same value as HINDSIGHT_API_TENANT_API_KEY).
+    settings.memory.provider = "hindsight";
+    environment = {
+      HINDSIGHT_MODE = "cloud";
+      HINDSIGHT_API_URL = "http://127.0.0.1:8888";
+      HINDSIGHT_BANK_ID = "hermes";
+    };
   };
 
   # Git-driven deploy + health-checked auto-rollback (see module docs).

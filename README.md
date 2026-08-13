@@ -85,7 +85,12 @@ container mode.
 ```sh
 ssh root@<ct-ip>
 # add your ssh keys (see hosts/hermes/configuration.nix)
-# set up agenix secrets (secrets/README.md)
+# install the pre-generated host key so agenix can decrypt the secrets
+# (see secrets/README.md):
+scp secrets/lxc-host-ed25519        root@<ct-ip>:/etc/ssh/ssh_host_ed25519_key
+scp secrets/lxc-host-ed25519.pub    root@<ct-ip>:/etc/ssh/ssh_host_ed25519_key.pub
+ssh root@<ct-ip> "chmod 0600 /etc/ssh/ssh_host_ed25519_key"
+# set up agenix secrets (secrets/README.md) — incl. the tailscale auth key
 git clone <this-repo> /var/lib/hermes-deploy
 ```
 
@@ -136,6 +141,12 @@ run under rootful podman via `virtualisation.oci-containers`.
 - **Access control:** tailnet-only (firewall opens 8888/9999 on `tailscale0`
   only). Clients authenticate with `Authorization: Bearer <HINDSIGHT_API_TENANT_API_KEY>`
   from the `hindsight-env` agenix secret.
+- **Hermes is wired in** via its official Hindsight memory provider
+  (`settings.memory.provider = "hindsight"` + `HINDSIGHT_*` env vars in
+  `hosts/hermes/configuration.nix`): auto-recall before each turn,
+  auto-retain after each response, plus `hindsight_retain`/`recall`/`reflect`
+  tools. It needs `HINDSIGHT_API_KEY` set in the `hermes-env` secret (same
+  value as `HINDSIGHT_API_TENANT_API_KEY`).
 - **Model:** the memory-extraction LLM is the generic `hermesDeploy.llm`
   option (`modules/llm.nix`) — defaults to opencode-go
   (`https://opencode.ai/zen/go/v1`) / `deepseek-v4-flash`. The key lives in

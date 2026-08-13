@@ -10,6 +10,9 @@ result-*
 # Local secret decryption intermediates
 secrets/*.tmp
 
+# Private key uploaded to the LXC at creation time — never commit.
+secrets/lxc-host-ed25519
+
 # Deploy logs
 /var/log/hermes-deploy.log
 
