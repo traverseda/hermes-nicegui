@@ -48,6 +48,7 @@
         agenix.nixosModules.age
         ./modules/hermes-service.nix
         ./modules/hermes-deploy.nix
+        ./modules/hermes-home-assistant.nix
         ./modules/llm.nix
         ./modules/hindsight.nix
       ];

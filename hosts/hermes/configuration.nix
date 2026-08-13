@@ -76,6 +76,12 @@
     group = "hermes";
     mode = "0440";
   };
+  age.secrets."home-assistant-env" = {
+    file = ../../secrets/home-assistant-env.age;
+    owner = "hermes";
+    group = "hermes";
+    mode = "0440";
+  };
   age.secrets."tailscale-auth" = {
     file = ../../secrets/tailscale-auth.age;
     owner = "root";
@@ -90,6 +96,18 @@
   services.hermes-agent.environmentFiles = [
     config.age.secrets."hermes-env".path
   ];
+
+  # ── Second gateway: OpenAI-compatible API server (home-assistant profile) ──
+  # Runs `hermes gateway` against the `home-assistant` profile on its own
+  # port (default 8643), so Home Assistant / other clients can hit it via the
+  # OpenAI-compatible API without touching the main agent's state.
+  # API_SERVER_KEY comes from the home-assistant-env agenix secret.
+  services.hermes-home-assistant = {
+    enable = true;
+    environmentFile = config.age.secrets."home-assistant-env".path;
+    # To reach it from elsewhere on the tailnet:
+    #   host = "0.0.0.0";
+  };
 
   # ── Nix ──────────────────────────────────────────────────────────────
   nix.settings = {

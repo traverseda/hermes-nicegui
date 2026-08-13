@@ -31,6 +31,7 @@ during initial creation** (see below) — otherwise agenix can't decrypt.
 | `hermes-env.age`         | `/run/agenix/hermes-env` | Hermes `.env` (API keys, tokens)  |
 | `tailscale-auth.age`     | `/run/agenix/tailscale-auth` | `services.tailscale.authKeyFile` |
 | `hindsight-env.age`      | `/run/agenix/hindsight-env` | Hindsight container env file   |
+| `home-assistant-env.age` | `/run/agenix/home-assistant-env` | home-assistant profile `.env` (API_SERVER_KEY) |
 
 `hermes-env` is a plain `KEY=value` file:
 
@@ -47,6 +48,15 @@ Hindsight API as `Authorization: Bearer` — keep it identical to the
 the token). The URL Hermes uses is declarative, in
 `hosts/hermes/configuration.nix` (`HINDSIGHT_API_URL=http://127.0.0.1:8888`),
 *not* the old remote `https://hindsight-api.0u0.ca`.
+
+`home-assistant-env` is a plain `KEY=value` file:
+
+```
+API_SERVER_KEY=<key clients send as `Authorization: Bearer` to the home-assistant API server (min 16 chars)>
+```
+
+It feeds the second gateway's profile `.env` (`services.hermes-home-assistant`).
+Provider keys are shared from `hermes-env` automatically.
 
 `hindsight-env` is also a plain `KEY=value` file:
 
