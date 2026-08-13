@@ -18,6 +18,12 @@
     # Pin to a specific rev: the project is Tier-2/best-effort, commits to
     # `main` can break the module. Update deliberately with:
     #   nix flake lock --update-input hermes-agent
+    #
+    # To carry LOCAL source patches (see patches/README.md), this input points
+    # at a FORK whose `patched` branch is rebuilt from patches/upstream.lock +
+    # patches/*.patch by scripts/patch-hermes.sh. That script rewrites this url
+    # and re-locks; the default below (upstream, no patches) is the safe
+    # fallback. Rollback = git revert of the url + flake.lock, then redeploy.
     hermes-agent = {
       url = "github:NousResearch/hermes-agent/fa83af3f9a42790730b8966ff67e7d9fb627899f";
       inputs.nixpkgs.follows = "nixpkgs";

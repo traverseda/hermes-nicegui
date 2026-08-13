@@ -60,6 +60,8 @@ scripts/deploy.sh                # deploy to the LXC (--snapshot option)
 scripts/rollback.sh              # step back one generation
 scripts/test.sh                  # nix flake check / local VM / integration test
 scripts/import-proxmox.sh        # build & import the LXC image into Proxmox
+scripts/patch-hermes.sh          # rebuild the hermes-agent fork w/ local patches
+patches/                         # local hermes source patches (see patches/README.md)
 secrets/                         # agenix encrypted secrets (see secrets/README.md)
 ```
 
@@ -123,11 +125,37 @@ scripts/deploy.sh
 If the gateway breaks, the watchdog notices within minutes and steps back one
 generation. If it breaks during the deploy, the deploy itself rolls back.
 
+## Patching Hermes
+
+Local source patches to hermes-agent's own code (core fixes *or* additive
+features) ship through a **fork**: the patch *content* lives in `patches/`
+(this repo, rollback-safe), and `scripts/patch-hermes.sh` applies it onto the
+pinned upstream rev (`patches/upstream.lock`), pushes the fork's `patched`
+branch, points `flake.nix` at the fork, and re-locks. See `patches/README.md`.
+
+```sh
+# produce a diff against the pinned rev, save as patches/00-my-fix.patch
+HERMES_FORK=github:you/hermes-agent \
+HERMES_FORK_REMOTE=git@github.com:you/hermes-agent.git \
+  scripts/patch-hermes.sh --dry-run      # verify without pushing
+HERMES_FORK=github:you/hermes-agent \
+HERMES_FORK_REMOTE=git@github.com:you/hermes-agent.git \
+  scripts/patch-hermes.sh --build        # push fork, relock, verify build
+git add patches/ flake.nix flake.lock && git commit -m "hermes: apply local patch"
+scripts/deploy.sh
+```
+
+Rollback: `git revert` the commit that bumped `flake.nix`/`flake.lock`, then
+`scripts/deploy.sh`. Drop a patch: delete its `.patch` and re-run
+`patch-hermes.sh`. Update upstream: `patch-hermes.sh --update-upstream <rev>`.
+
 ## Notes
 
 - **Pin your inputs.** `hermes-agent` is pinned to a specific rev in
   `flake.nix` — the project is best-effort and `main` can break the module.
-  Update deliberately: `nix flake lock --update-input hermes-agent`.
+  Update deliberately: `nix flake lock --update-input hermes-agent`. If you
+  carry local patches, the input is your fork's `patched` branch instead — see
+  [Patching Hermes](#patching-hermes).
 - **Secrets never go in Nix config.** Use agenix (`secrets/README.md`).
 - **`nix flake update`** bumps nixpkgs/hermes-agent/agenix to latest locks —
   treat this as a normal deploy and let the watchdog validate it.
