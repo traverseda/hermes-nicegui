@@ -48,8 +48,11 @@ flake.nix                        # inputs: nixpkgs, hermes-agent, agenix
 hosts/hermes/configuration.nix   # Proxmox LXC host config
 modules/hermes-service.nix       # hermes-agent + tailscale (shared w/ tests)
 modules/hermes-deploy.nix        # deploy/rollback/watchdog machinery
+modules/hindsight.nix            # Hindsight memory service (podman, tailnet-only)
+modules/llm.nix                  # generic preferred-model config (hermesDeploy.llm)
 tests/vm-configuration.nix       # local test VM config
 tests/hermes-test.nix            # NixOS integration test
+tests/hindsight-test.nix         # NixOS integration test
 scripts/deploy.sh                # deploy to the LXC (--snapshot option)
 scripts/rollback.sh              # step back one generation
 scripts/test.sh                  # nix flake check / local VM / integration test
@@ -120,3 +123,34 @@ generation. If it breaks during the deploy, the deploy itself rolls back.
 - **Secrets never go in Nix config.** Use agenix (`secrets/README.md`).
 - **`nix flake update`** bumps nixpkgs/hermes-agent/agenix to latest locks —
   treat this as a normal deploy and let the watchdog validate it.
+
+## Hindsight memory service
+
+The LXC also runs a standalone [Hindsight](https://github.com/vectorize-io/hindsight)
+memory service (retain / recall / reflect for AI agents) — see
+`modules/hindsight.nix`. It's an official container image pinned by digest,
+run under rootful podman via `virtualisation.oci-containers`.
+
+- **API:** `http://127.0.0.1:8888` on the host, `http://<tailscale-ip>:8888`
+  over the tailnet. Health: `GET /health`.
+- **Access control:** tailnet-only (firewall opens 8888/9999 on `tailscale0`
+  only). Clients authenticate with `Authorization: Bearer <HINDSIGHT_API_TENANT_API_KEY>`
+  from the `hindsight-env` agenix secret.
+- **Model:** the memory-extraction LLM is the generic `hermesDeploy.llm`
+  option (`modules/llm.nix`) — defaults to opencode-go
+  (`https://opencode.ai/zen/go/v1`) / `deepseek-v4-flash`. The key lives in
+  the secret, not in Nix config.
+- **Data:** embedded PostgreSQL (`pg0`) persists in `/var/lib/hindsight`
+  (bind-mounted to the container's `~/.pg0`).
+- **Control plane (dashboard):** off by default; set
+  `services.hindsight.enableControlPlane = true` to run it on :9999.
+- **Deploy one-time setup:** create/rotate `secrets/hindsight-env.age` (see
+  `secrets/README.md` — the committed copy is a local-key placeholder). Then
+  a normal `scripts/deploy.sh` ships it. The container service is
+  `podman-hindsight.service`; `podman healthcheck run hindsight` reports its
+  health. The first deploy pulls the ~2GB image, so the unit may sit in
+  activating/failed state for a while on first boot — the hermes watchdog
+  checks the agent (not hindsight), so it won't false-positive roll back.
+
+Other tools on the tailnet can point a `HindsightClient` at
+`http://<tailscale-ip>:8888`.

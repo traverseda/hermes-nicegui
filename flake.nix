@@ -48,6 +48,8 @@
         agenix.nixosModules.age
         ./modules/hermes-service.nix
         ./modules/hermes-deploy.nix
+        ./modules/llm.nix
+        ./modules/hindsight.nix
       ];
 
       hermes = lib.nixosSystem {
@@ -84,6 +86,9 @@
         hermes-vm-build = self.packages.${system}.hermes-vm;
         hermes-integration = import ./tests/hermes-test.nix {
           inherit nixpkgs hermes-agent;
+        };
+        hindsight-integration = import ./tests/hindsight-test.nix {
+          inherit nixpkgs;
         };
       };
 

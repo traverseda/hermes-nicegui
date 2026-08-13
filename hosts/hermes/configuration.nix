@@ -43,6 +43,15 @@
     branch = "main";
   };
 
+  # ── Hindsight memory service ─────────────────────────────────────────
+  # Standalone agent-memory API (retain/recall/reflect), tailnet-only.
+  # Model comes from `hermesDeploy.llm` (defaults to opencode-go /
+  # deepseek-v4-flash); secrets come from the agenix env file below.
+  services.hindsight = {
+    enable = true;
+    environmentFile = config.age.secrets."hindsight-env".path;
+  };
+
   # ── Secrets (agenix) ─────────────────────────────────────────────────
   # Encrypted with your pubkey (see secrets/README.md). Decrypted to
   # /run/agenix/... at activation time — never in /nix/store.
@@ -56,6 +65,11 @@
     file = ../../secrets/tailscale-auth.age;
     owner = "root";
     mode = "0400";
+  };
+  age.secrets."hindsight-env" = {
+    file = ../../secrets/hindsight-env.age;
+    owner = "root";
+    mode = "0440";
   };
 
   services.hermes-agent.environmentFiles = [

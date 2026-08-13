@@ -11,6 +11,7 @@ world-readable) and never into this repo in plaintext.
 | ------------------------ | --------------------- | ----------------------------------- |
 | `hermes-env.age`         | `/run/agenix/hermes-env` | Hermes `.env` (API keys, tokens)  |
 | `tailscale-auth.age`     | `/run/agenix/tailscale-auth` | `services.tailscale.authKeyFile` |
+| `hindsight-env.age`      | `/run/agenix/hindsight-env` | Hindsight container env file   |
 
 `hermes-env` is a plain `KEY=value` file, e.g.:
 
@@ -18,6 +19,23 @@ world-readable) and never into this repo in plaintext.
 OPENROUTER_API_KEY=sk-or-...
 ANTHROPIC_API_KEY=sk-ant-...
 ```
+
+`hindsight-env` is also a plain `KEY=value` file:
+
+```
+HINDSIGHT_API_LLM_API_KEY=<key for the preferred model endpoint (opencode-go)>
+HINDSIGHT_API_TENANT_API_KEY=<shared key clients send as `Authorization: Bearer`>
+HINDSIGHT_CP_ACCESS_KEY=<optional; control-plane login, only if the dashboard is enabled>
+```
+
+The LLM *endpoint* and *model* are not secrets — they live in Nix as
+`hermesDeploy.llm` (default: opencode-go `https://opencode.ai/zen/go/v1` with
+`deepseek-v4-flash`). Only the key lives here.
+
+> **Note:** `secrets/hindsight-env.age` currently contains a placeholder
+> encrypted to your *local* key so the flake builds. Before deploying to the
+> LXC, re-encrypt it to the LXC's age pubkey (see Setup, step 1) or activation
+> will fail on the target.
 
 ## Setup
 
@@ -41,6 +59,7 @@ ANTHROPIC_API_KEY=sk-ant-...
      secrets = {
        "hermes-env" = { };
        "tailscale-auth" = { };
+       "hindsight-env" = { };
      };
    }
    ```
@@ -51,6 +70,7 @@ ANTHROPIC_API_KEY=sk-ant-...
    nix develop
    agenix -e secrets/hermes-env.age        # edit hermes-env
    agenix -e secrets/tailscale-auth.age    # edit tailscale auth key
+   agenix -e secrets/hindsight-env.age     # edit hindsight keys
    ```
 
 4. Commit the `.age` files. Deploy; the LXC decrypts them on activation.
