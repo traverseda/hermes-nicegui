@@ -47,9 +47,11 @@ for an isolated Ubuntu container — documented upstream.)
 flake.nix                        # inputs: nixpkgs, hermes-agent, agenix
 hosts/hermes/configuration.nix   # Proxmox LXC host config
 modules/hermes-service.nix       # hermes-agent + tailscale (shared w/ tests)
+modules/hermes-skills.nix        # vendored skills wiring (no bundled skills)
 modules/hermes-deploy.nix        # deploy/rollback/watchdog machinery
 modules/hindsight.nix            # Hindsight memory service (podman, tailnet-only)
 modules/llm.nix                  # generic preferred-model config (hermesDeploy.llm)
+skills/                          # curated, NixOS-corrected skills (external_dirs)
 tests/vm-configuration.nix       # local test VM config
 tests/hermes-test.nix            # NixOS integration test (runtime; slow)
 tests/hermes-config-check.nix    # fast eval-time deploy/rollback wiring check

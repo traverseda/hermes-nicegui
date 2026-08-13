@@ -13,6 +13,7 @@
 {
   imports = [
     ./../modules/hermes-service.nix
+    ./../modules/hermes-skills.nix
     ./../modules/hermes-deploy.nix
   ];
 

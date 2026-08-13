@@ -47,6 +47,7 @@
         hermes-agent.nixosModules.default
         agenix.nixosModules.age
         ./modules/hermes-service.nix
+        ./modules/hermes-skills.nix
         ./modules/hermes-deploy.nix
         ./modules/hermes-ha.nix
         ./modules/llm.nix
