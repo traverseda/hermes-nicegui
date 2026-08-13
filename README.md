@@ -156,14 +156,30 @@ run under rootful podman via `virtualisation.oci-containers`.
   the secret, not in Nix config.
 - **Data:** embedded PostgreSQL (`pg0`) persists in `/var/lib/hindsight`
   (bind-mounted to the container's `~/.pg0`).
-- **Code optimisation (per bank):** Hindsight config is hierarchical
-  (global → tenant → bank), and the service is expected to host both code
-  and non-code banks, so global settings stay neutral. Code-tuned retain
-  config (`retain_extraction_mode=verbatim` + an engineering-focused
-  `retain_mission`) is applied to exactly the banks listed in
-  `services.hindsight.codeBanks` — here `[ "hermes" ]` — via the per-bank
-  config API by the `hindsight-code-bank-config.service` oneshot. Add/remove
-  banks there and `systemctl start hindsight-code-bank-config` to re-apply.
+- **Per-bank tuning (code vs chat):** Hindsight config is hierarchical
+  (global → tenant → bank), and the service is expected to host both code and
+  non-code banks. The `code` bank (used by OpenCode) gets byte-exact code
+  tuning via the per-bank config API (`hindsight-code-bank-config.service`
+  oneshot): `retain_extraction_mode=verbatim` + `retain_chunk_size=800`
+  (source chunks stored byte-exact), an engineering-focused `retain_mission`
+  + `observations_mission` (preserve exact symbols, cite error text verbatim,
+  never paraphrase identifiers, extract "Technical preferences and
+  conventions" like loguru-over-stdlib). The `hermes` bank (the agent's
+  general/chat bank) keeps untouched upstream defaults. Add/remove banks in
+  `services.hindsight.codeBanks` and `systemctl start
+  hindsight-code-bank-config` to re-apply.
+- **Shared global changes (help every bank):** `simple` text-search dictionary
+  (`HINDSIGHT_API_TEXT_SEARCH_EXTENSION_NATIVE_LANGUAGE=simple` — kills English
+  stemming so BM25 matches `get_user_id` exactly); ONNX
+  `intfloat/multilingual-e5-small` embeddings (384d, same dims as the old
+  bge-small, so no dimension-change wipe/re-embed of existing facts); and a
+  `bm25:high` recall boost (`HINDSIGHT_API_RECALL_STRATEGY_BOOSTS`) so code
+  recall is keyword-driven. Consolidation nuance: `enable_auto_consolidation`
+  is deliberately left ON — consolidation LLM-resummarises clustered code
+  memories into abstracted observations on top of the byte-exact chunks
+  (additive, not destructive); set
+  `services.hindsight.codeBankEnableAutoConsolidation = false` for true
+  byte-exact-only.
 - **Control plane (dashboard):** off by default; set
   `services.hindsight.enableControlPlane = true` to run it on :9999.
 - **Deploy one-time setup:** create/rotate `secrets/hindsight-env.age` (see

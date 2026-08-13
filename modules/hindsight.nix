@@ -20,10 +20,16 @@
 #     env file, never from Nix config.
 #
 # Memory quality is tuned for code on the banks listed in `codeBanks` (see
-# below): verbatim retain keeps exact code instead of summarising it, and an
-# engineering-focused retain mission steers fact extraction. Text-search is
-# left on the upstream defaults because it is global — the service is expected
-# to serve both code and non-code banks.
+# below): verbatim retain stores byte-exact source chunks (chunk size 800),
+# an engineering-focused retain mission + observations mission steer fact
+# extraction, and recall boosts BM25 so exact identifier hits beat semantic
+# fluff. `enable_auto_consolidation` stays ON so consolidation adds abstracted
+# observations on top of the verbatim chunks (additive, not destructive).
+# Global settings that help every bank: `simple` text-search dictionary (no
+# English stemming — BM25 matches `get_user_id` exactly), ONNX
+# multilingual-e5-small embeddings (384d, same as the old bge-small so no
+# dimension-change re-embed), and the extraction LLM. Banks not in `codeBanks`
+# (e.g. the hermes agent's general/chat bank) keep untouched upstream defaults.
 #
 # Clients reach the API over the tailnet:  http://<tailscale-ip>:8888  with
 # `Authorization: Bearer $HINDSIGHT_API_TENANT_API_KEY`. Hermes (same host)
@@ -42,17 +48,35 @@ let
 
   # Retain config applied to each bank in `codeBanks` via
   # PATCH /v1/default/banks/{bank_id}/config.
+  #
+  # Byte-exact where it matters, deliberately NOT fully byte-exact-only:
+  # `enable_auto_consolidation` stays ON (default), so consolidation
+  # LLM-resummarises clustered code memories into abstracted observations on
+  # top of the verbatim chunks — additive, not destructive. That is the
+  # settled trade-off (see hindsight-admin pitfall 9).
   codeBankRetainMission =
     "Extract and prioritise engineering facts: exact code snippets, function "
     + "and variable names, API signatures and endpoints, error messages and "
     + "their fixes, build and deployment commands, architectural decisions "
     + "and their rationale, performance measurements, and project "
-    + "conventions. Preserve verbatim code. Ignore social pleasantries and "
-    + "anything unlikely to matter in six months.";
+    + "conventions. Preserve exact symbols and identifiers verbatim — never "
+    + "paraphrase or rename them. Cite error message text exactly as written. "
+    + "Also extract the category 'Technical preferences and conventions' "
+    + "(e.g. loguru over stdlib logging, type hints required). Ignore social "
+    + "pleasantries and anything unlikely to matter in six months.";
+  codeBankObservationsMission =
+    "Synthesise durable engineering observations from code memories: stable "
+    + "architecture patterns, library and tooling choices, and conventions. "
+    + "Preserve exact symbol and identifier names; never paraphrase them. "
+    + "Keep the observations abstracted summaries layered on top of the "
+    + "byte-exact source chunks rather than replacing them.";
   codeBankConfigJson = builtins.toJSON {
     updates = {
       retain_extraction_mode = "verbatim";
+      retain_chunk_size = cfg.codeBankRetainChunkSize;
       retain_mission = codeBankRetainMission;
+      observations_mission = codeBankObservationsMission;
+      enable_auto_consolidation = cfg.codeBankEnableAutoConsolidation;
     };
   };
 in
@@ -188,6 +212,81 @@ in
         ParadeDB's default (`unicode_words`).
       '';
     };
+
+    textSearchNativeLanguage = lib.mkOption {
+      type = lib.types.nullOr lib.types.str;
+      default = "simple";
+      description = ''
+        PostgreSQL text-search dictionary for the `native` backend
+        (`HINDSIGHT_API_TEXT_SEARCH_EXTENSION_NATIVE_LANGUAGE`). Defaults to
+        `simple` (no stemming) so BM25 matches identifiers like `get_user_id`
+        exactly instead of getting mangled by English stemming. Set to null to
+        use the upstream default (`english`).
+      '';
+    };
+
+    embeddingsProvider = lib.mkOption {
+      type = lib.types.str;
+      default = "onnx";
+      description = ''
+        Embeddings backend (`HINDSIGHT_API_EMBEDDINGS_PROVIDER`). Defaults to
+        `onnx` (in-process local CPU; no Ollama/TEI/API sidecar) with
+        `multilingual-e5-small`, which is 384-dimensional — the same dims as
+        the previous bge-small, so no dimension-change wipe/re-embed.
+      '';
+    };
+
+    embeddingsOnnxModelId = lib.mkOption {
+      type = lib.types.str;
+      default = "intfloat/multilingual-e5-small";
+      description = ''
+        ONNX embedding model id (`HINDSIGHT_API_EMBEDDINGS_ONNX_MODEL_ID`).
+        The default `multilingual-e5-small` pairs with the default E5 query /
+        passage prefixes in the image.
+      '';
+    };
+
+    embeddingsOnnxDimensions = lib.mkOption {
+      type = lib.types.int;
+      default = 384;
+      description = ''
+        Embedding dimensions for the ONNX model
+        (`HINDSIGHT_API_EMBEDDINGS_ONNX_DIMENSIONS`).
+      '';
+    };
+
+    recallStrategyBoosts = lib.mkOption {
+      type = lib.types.nullOr lib.types.str;
+      default = "bm25:high";
+      description = ''
+        Recall source-priority boosts (`HINDSIGHT_API_RECALL_STRATEGY_BOOSTS`),
+        a comma-separated `strategy:level` list. Defaults to `bm25:high` so
+        code recall is keyword-driven — exact identifier hits beat semantic
+        fluff. Set to null to leave the upstream default (empty = no boosts).
+        Note: this is a server-level (static) setting, not per-bank.
+      '';
+    };
+
+    codeBankRetainChunkSize = lib.mkOption {
+      type = lib.types.int;
+      default = 800;
+      description = ''
+        `retain_chunk_size` applied to each bank in `codeBanks`. Source chunks
+        are stored byte-exact, so smaller chunks mean finer-grained exact
+        retrieval; the docs' own `documents` strategy example uses 800.
+      '';
+    };
+
+    codeBankEnableAutoConsolidation = lib.mkOption {
+      type = lib.types.bool;
+      default = true;
+      description = ''
+        `enable_auto_consolidation` for each code bank. Kept true (the default)
+        deliberately: consolidation LLM-resummarises clustered code memories
+        into abstracted observations on top of the byte-exact chunks —
+        additive, not destructive. Set to false for true byte-exact-only.
+      '';
+    };
   };
 
   config = lib.mkIf cfg.enable {
@@ -209,6 +308,19 @@ in
           HINDSIGHT_API_LLM_BASE_URL = llm.baseUrl;
           HINDSIGHT_API_LLM_MODEL = llm.model;
           HINDSIGHT_API_TEXT_SEARCH_EXTENSION = cfg.textSearchExtension;
+          # Embeddings: in-process ONNX, multilingual-e5-small (384d — same
+          # dims as the old bge-small, so no dimension-change re-embed).
+          HINDSIGHT_API_EMBEDDINGS_PROVIDER = cfg.embeddingsProvider;
+          HINDSIGHT_API_EMBEDDINGS_ONNX_MODEL_ID = cfg.embeddingsOnnxModelId;
+          HINDSIGHT_API_EMBEDDINGS_ONNX_DIMENSIONS = toString cfg.embeddingsOnnxDimensions;
+        }
+        // lib.optionalAttrs (cfg.textSearchNativeLanguage != null) {
+          # simple dictionary: no English stemming, so BM25 matches
+          # `get_user_id` exactly.
+          HINDSIGHT_API_TEXT_SEARCH_EXTENSION_NATIVE_LANGUAGE = cfg.textSearchNativeLanguage;
+        }
+        // lib.optionalAttrs (cfg.recallStrategyBoosts != null) {
+          HINDSIGHT_API_RECALL_STRATEGY_BOOSTS = cfg.recallStrategyBoosts;
         }
         // lib.optionalAttrs (cfg.textSearchTokenizer != null) {
           HINDSIGHT_API_TEXT_SEARCH_EXTENSION_PG_SEARCH_TOKENIZER = cfg.textSearchTokenizer;

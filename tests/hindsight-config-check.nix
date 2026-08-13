@@ -23,7 +23,7 @@ let
             enable = true;
             autoStart = false; # don't pull the ~2GB image
             environmentFile = "/dummy/env";
-            codeBanks = [ "hermes" ];
+            codeBanks = [ "code" ];
           };
         }
       ];
@@ -83,8 +83,15 @@ pkgs.runCommand "hindsight-config-check"
     ${need "-e HINDSIGHT_API_LLM_BASE_URL=https://opencode.ai/zen/go/v1" "podman.script"}
     ${need "HINDSIGHT_API_TENANT_EXTENSION" "podman.script"}
 
-    # Global settings stay neutral (the service also hosts non-code banks).
+    # Shared global changes (help code and non-code banks alike).
     ${need "-e HINDSIGHT_API_TEXT_SEARCH_EXTENSION=native" "podman.script"}
+    ${need "-e HINDSIGHT_API_TEXT_SEARCH_EXTENSION_NATIVE_LANGUAGE=simple" "podman.script"}
+    ${need "-e HINDSIGHT_API_EMBEDDINGS_PROVIDER=onnx" "podman.script"}
+    ${need "-e HINDSIGHT_API_EMBEDDINGS_ONNX_MODEL_ID=intfloat/multilingual-e5-small" "podman.script"}
+    ${need "-e HINDSIGHT_API_EMBEDDINGS_ONNX_DIMENSIONS=384" "podman.script"}
+    ${need "-e HINDSIGHT_API_RECALL_STRATEGY_BOOSTS=bm25:high" "podman.script"}
+
+    # Global settings stay neutral (the service also hosts non-code banks).
     ${mustNot "HINDSIGHT_API_RETAIN_EXTRACTION_MODE" "podman.script"}
     ${mustNot "HINDSIGHT_API_RETAIN_MISSION" "podman.script"}
 
@@ -103,9 +110,12 @@ pkgs.runCommand "hindsight-config-check"
     ${need "Type=oneshot" "oneshot.unit"}
 
     # The oneshot script (executed on a real box) carries the code config.
-    ${need "banks=\"hermes\"" "oneshot.script"}
+    ${need "banks=\"code\"" "oneshot.script"}
     ${need "\"retain_extraction_mode\":\"verbatim\"" "oneshot.script"}
+    ${need "\"retain_chunk_size\":800" "oneshot.script"}
     ${need "\"retain_mission\"" "oneshot.script"}
+    ${need "\"observations_mission\"" "oneshot.script"}
+    ${need "\"enable_auto_consolidation\":true" "oneshot.script"}
     ${need "/health" "oneshot.script"}
 
     touch "$out"

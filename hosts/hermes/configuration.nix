@@ -58,13 +58,13 @@
   # Standalone agent-memory API (retain/recall/reflect), tailnet-only.
   # Model comes from `hermesDeploy.llm` (defaults to opencode-go /
   # deepseek-v4-flash); secrets come from the agenix env file below.
-  # `hermes` is a code bank: verbatim retain + engineering-focused mission,
-  # applied via the per-bank config API (others stay neutral — the service
-  # also hosts non-code banks).
+  # Per-bank split: only the `code` bank (opencode) gets byte-exact verbatim
+  # retain + engineering missions; the `hermes` bank (the agent's general
+  # chat) stays on untouched defaults.
   services.hindsight = {
     enable = true;
     environmentFile = config.age.secrets."hindsight-env".path;
-    codeBanks = [ "hermes" ];
+    codeBanks = [ "code" ];
   };
 
   # ── Secrets (agenix) ─────────────────────────────────────────────────
