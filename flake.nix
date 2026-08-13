@@ -80,14 +80,20 @@
         default = self.packages.${system}.toplevel;
       };
 
-      # `nix flake check` validates everything and runs the NixOS test.
+      # `nix flake check` validates everything. The *-config-check targets are
+      # fast eval-time assertions on the generated units (no VM boot). The
+      # hermes VM integration test (runtime behaviour) remains as the slow,
+      # opt-in gate.
       checks.${system} = {
         inherit (self.packages.${system}) toplevel tarball;
         hermes-vm-build = self.packages.${system}.hermes-vm;
+        hermes-config-check = import ./tests/hermes-config-check.nix {
+          inherit nixpkgs hermes-agent;
+        };
         hermes-integration = import ./tests/hermes-test.nix {
           inherit nixpkgs hermes-agent;
         };
-        hindsight-integration = import ./tests/hindsight-test.nix {
+        hindsight-config-check = import ./tests/hindsight-config-check.nix {
           inherit nixpkgs;
         };
       };

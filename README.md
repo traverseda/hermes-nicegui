@@ -51,8 +51,9 @@ modules/hermes-deploy.nix        # deploy/rollback/watchdog machinery
 modules/hindsight.nix            # Hindsight memory service (podman, tailnet-only)
 modules/llm.nix                  # generic preferred-model config (hermesDeploy.llm)
 tests/vm-configuration.nix       # local test VM config
-tests/hermes-test.nix            # NixOS integration test
-tests/hindsight-test.nix         # NixOS integration test
+tests/hermes-test.nix            # NixOS integration test (runtime; slow)
+tests/hermes-config-check.nix    # fast eval-time deploy/rollback wiring check
+tests/hindsight-config-check.nix # fast eval-time Hindsight wiring check
 scripts/deploy.sh                # deploy to the LXC (--snapshot option)
 scripts/rollback.sh              # step back one generation
 scripts/test.sh                  # nix flake check / local VM / integration test
@@ -153,6 +154,14 @@ run under rootful podman via `virtualisation.oci-containers`.
   the secret, not in Nix config.
 - **Data:** embedded PostgreSQL (`pg0`) persists in `/var/lib/hindsight`
   (bind-mounted to the container's `~/.pg0`).
+- **Code optimisation (per bank):** Hindsight config is hierarchical
+  (global → tenant → bank), and the service is expected to host both code
+  and non-code banks, so global settings stay neutral. Code-tuned retain
+  config (`retain_extraction_mode=verbatim` + an engineering-focused
+  `retain_mission`) is applied to exactly the banks listed in
+  `services.hindsight.codeBanks` — here `[ "hermes" ]` — via the per-bank
+  config API by the `hindsight-code-bank-config.service` oneshot. Add/remove
+  banks there and `systemctl start hindsight-code-bank-config` to re-apply.
 - **Control plane (dashboard):** off by default; set
   `services.hindsight.enableControlPlane = true` to run it on :9999.
 - **Deploy one-time setup:** create/rotate `secrets/hindsight-env.age` (see
