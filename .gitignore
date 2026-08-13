@@ -1,0 +1,19 @@
+# Result artifacts from nix builds
+result
+result-*
+
+# NixOS generation / boot artifacts
+*.qcow2
+*.raw
+*.img
+
+# Local secret decryption intermediates
+secrets/*.tmp
+
+# Deploy logs
+/var/log/hermes-deploy.log
+
+# Editor
+.vscode/
+.idea/
+*.swp

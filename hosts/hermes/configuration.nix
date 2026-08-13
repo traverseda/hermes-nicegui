@@ -1,0 +1,115 @@
+# Hermes LXC configuration — runs on Proxmox VE.
+#
+# Importing the proxmox-lxc module sets up:
+#   * boot.isContainer = true (no kernel/bootloader — the host provides it)
+#   * systemd-networkd to accept network config from Proxmox
+#   * sshd on demand
+#   * a tarball build (`system.build.tarball`) for importing into Proxmox
+#
+# Use `scripts/import-proxmox.sh` to build and import this into a CT.
+
+{
+  config,
+  pkgs,
+  lib,
+  modulesPath,
+  ...
+}:
+
+{
+  imports = [
+    (modulesPath + "/virtualisation/proxmox-lxc.nix")
+  ];
+
+  proxmoxLXC = {
+    enable = true;
+    # Unprivileged LXC: network & hostname are managed by Proxmox.
+    manageNetwork = false;
+    manageHostName = false;
+  };
+
+  # The hermes service itself lives in modules/hermes-service.nix (shared
+  # with the test VM). Overrides that are LXC-specific:
+  services.hermes-agent = {
+    stateDir = "/var/lib/hermes";
+    workingDirectory = "/var/lib/hermes/workspace";
+  };
+
+  # Git-driven deploy + health-checked auto-rollback (see module docs).
+  services.hermes-deploy = {
+    enable = true;
+    repoDir = "/var/lib/hermes-deploy";
+    flakeAttr = "hermes";
+    branch = "main";
+  };
+
+  # ── Secrets (agenix) ─────────────────────────────────────────────────
+  # Encrypted with your pubkey (see secrets/README.md). Decrypted to
+  # /run/agenix/... at activation time — never in /nix/store.
+  age.secrets."hermes-env" = {
+    file = ../../secrets/hermes-env.age;
+    owner = "hermes";
+    group = "hermes";
+    mode = "0440";
+  };
+  age.secrets."tailscale-auth" = {
+    file = ../../secrets/tailscale-auth.age;
+    owner = "root";
+    mode = "0400";
+  };
+
+  services.hermes-agent.environmentFiles = [
+    config.age.secrets."hermes-env".path
+  ];
+
+  # ── Nix ──────────────────────────────────────────────────────────────
+  nix.settings = {
+    experimental-features = [
+      "nix-command"
+      "flakes"
+    ];
+    # Let the bot (via hermes user) and root trigger builds/rollbacks.
+    trusted-users = [
+      "root"
+      "@wheel"
+    ];
+    substituters = [ "https://cache.nixos.org" ];
+    trusted-public-keys = [ "cache.nixos.org-1:6NCHdD59X431o0gWypbMrWURtJAfVcLI/QkGjRcUv6w=" ];
+  };
+
+  # ── SSH ──────────────────────────────────────────────────────────────
+  # Deploy from a build machine via: nixos-rebuild switch --target-host ...
+  services.openssh = {
+    enable = true;
+    settings = {
+      PermitRootLogin = "prohibit-password";
+      PasswordAuthentication = false;
+    };
+  };
+  # Populate with the operator's pubkeys:  ssh-keyscan / add manually.
+  users.users.root.openssh.authorizedKeys.keys = [
+    # "ssh-ed25519 AAAA... operator@machine"
+  ];
+
+  # ── Firewall ─────────────────────────────────────────────────────────
+  # Tailscale traffic rides on the tailnet; nothing else needs exposing.
+  networking.firewall = {
+    enable = true;
+    # ssh from the Proxmox host / tailnet
+    allowedTCPPorts = [ 22 ];
+  };
+
+  # ── System ───────────────────────────────────────────────────────────
+  system.stateVersion = "26.05";
+
+  system.activationScripts.hermes-repo-init = lib.stringAfter [ "users" ] ''
+    # The deploy machinery expects a git checkout of this flake here.
+    mkdir -p /var/lib/hermes-deploy
+    chmod 0755 /var/lib/hermes-deploy
+    if [ ! -d /var/lib/hermes-deploy/.git ]; then
+      echo "hermes: /var/lib/hermes-deploy is not a git repo."
+      echo "hermes: clone it after first boot:"
+      echo "  git clone <this-repo> /var/lib/hermes-deploy"
+    fi
+  '';
+}
