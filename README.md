@@ -13,10 +13,17 @@ one of those paths is routed through a mechanism that can be undone:
 
 | Change the bot makes                        | Path to production                          | Rollback                                   |
 | ------------------------------------------- | ------------------------------------------- | ------------------------------------------ |
-| Config / settings / skills / docs           | git commit in this flake                    | `git revert` / `hermes-rollback`           |
+| Config / settings / skills / docs           | local git commit in `/var/lib/hermes-deploy`| `hermes-rollback` (one commit + generation)|
 | New capabilities / packages / services      | `nixos-rebuild switch` → new generation     | `nixos-rebuild switch --rollback`          |
 | Secrets (API keys)                          | agenix (encrypted, decrypted on activation) | rotate/rekey, no plaintext ever in store   |
 | Anything else that breaks the gateway       | health-checked auto-rollback watchdog       | automatic, one generation per check        |
+
+> **No git remote (by design).** The flake repo is a plain local checkout — no
+> `origin`. The build machine is the source of truth: `scripts/deploy.sh`
+> **rsyncs** the working tree into `/var/lib/hermes-deploy` on the LXC, then
+> activates a new generation. The bot commits and rolls back directly in that
+> local checkout. Backup of the repo is handled out-of-band (external), so the
+> deploy machinery has no network dependency beyond the Nix closure copy.
 
 ### Rollback layers (defence in depth)
 
@@ -27,7 +34,7 @@ one of those paths is routed through a mechanism that can be undone:
    generation newer than `last-known-good` reports unhealthy, it rolls back
    **exactly one generation** per run — never more.
 3. **Manual rollback** — `hermes-rollback` / `scripts/rollback.sh` steps back
-   one generation (and reverts the flake repo one commit).
+   one local git commit (in `/var/lib/hermes-deploy`) and one generation.
 4. **Proxmox snapshots** — `scripts/deploy.sh --snapshot` snapshots the CT
    before deploying, giving you a full-disk escape hatch independent of Nix.
 
@@ -150,10 +157,16 @@ scp secrets/lxc-host-ed25519        root@<ct-ip>:/etc/ssh/ssh_host_ed25519_key
 scp secrets/lxc-host-ed25519.pub    root@<ct-ip>:/etc/ssh/ssh_host_ed25519_key.pub
 ssh root@<ct-ip> "chmod 0600 /etc/ssh/ssh_host_ed25519_key"
 # set up agenix secrets (secrets/README.md) — incl. the tailscale auth key
-git clone --recurse-submodules <this-repo> /var/lib/hermes-deploy
+# copy the repo (NO remote — the build machine is the source of truth;
+# deploy.sh rsyncs it on every deploy):
+rsync -a --exclude '.git/' --exclude 'state/' --exclude 'result*' \
+  --exclude '*.qcow2' --exclude 'secrets/lxc-host-ed25519' \
+  <this-repo>/ root@<ct-ip>:/var/lib/hermes-deploy/
 ```
 
-From then on the LXC rebuilds *itself* from that git checkout.
+From then on the LXC rebuilds *itself* from that local checkout: the bot
+commits there directly and runs `hermes-deploy`, and `scripts/deploy.sh`
+re-syncs it from the build machine before each new generation.
 
 ### 4. Deploy & roll back
 
@@ -173,8 +186,12 @@ loop whether the change comes from a human or from the bot:
 
 ```sh
 git add -A && git commit -m "hermes: add skill for <thing>"
-scripts/deploy.sh
+scripts/deploy.sh      # rsyncs the repo to the LXC, builds, activates
 ```
+
+On the LXC (what the bot does): edit `/var/lib/hermes-deploy`, commit locally,
+then `hermes-deploy` (rebuilds from that checkout). `hermes-rollback` steps the
+local repo back one commit and rolls back one generation.
 
 If the gateway breaks, the watchdog notices within minutes and steps back one
 generation. If it breaks during the deploy, the deploy itself rolls back.

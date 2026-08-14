@@ -52,10 +52,15 @@ let
 
     log() { echo "[hermes-deploy] $*"; }
 
-    log "syncing flake repo ${cfg.repoDir}"
-    git -C ${cfg.repoDir} fetch origin
-    git -C ${cfg.repoDir} checkout -f origin/${cfg.branch}
-    git -C ${cfg.repoDir} reset --hard origin/${cfg.branch}
+    # No git remote: the checkout in ${cfg.repoDir} IS the source of truth.
+    # The operator pushes a fresh copy (scripts/deploy.sh rsyncs it), and the
+    # bot commits directly here then rebuilds. Record any uncommitted edits in
+    # the local ledger so the deploy is always a committed state (rollback
+    # = git reset HEAD~1).
+    git -C ${cfg.repoDir} config user.name "hermes-deploy"
+    git -C ${cfg.repoDir} config user.email "hermes-deploy@localhost"
+    git -C ${cfg.repoDir} add -A
+    git -C ${cfg.repoDir} commit -q -m "deploy $(date -Is)" 2>/dev/null || true
     # Materialize git submodules (e.g. vendor/xaelWiki) on first sync. Never
     # --force: local edits inside a submodule (xaelwiki source) must survive
     # deploys — that is the "editable, low-stakes" design.
@@ -100,10 +105,11 @@ let
     set -euo pipefail
     log() { echo "[hermes-rollback] $*"; }
 
+    # No git remote: the checkout in ${cfg.repoDir} IS the source of truth.
+    # Step the local ledger back one commit (the deploy script guarantees the
+    # active state is always a commit), then roll back one generation.
     log "reverting flake repo by one commit"
-    git -C ${cfg.repoDir} fetch origin
-    git -C ${cfg.repoDir} checkout -f origin/${cfg.branch}
-    git -C ${cfg.repoDir} reset --hard origin/${cfg.branch}~1 || true
+    git -C ${cfg.repoDir} reset --hard HEAD~1 2>/dev/null || true
     git -C ${cfg.repoDir} submodule update --init 2>/dev/null || true
 
     log "rolling back system by one generation"

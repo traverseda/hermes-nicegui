@@ -52,13 +52,19 @@ pkgs.testers.runNixOSTest {
     machine.succeed("command -v git")
     machine.succeed("hermes-status | grep -q generations")
 
-    # Manual rollback against a real git repo: the git phase must run and
-    # rewind the flake checkout by one commit. The trailing `nixos-rebuild
-    # switch --rollback` step may legitimately fail (a fresh VM has only one
-    # generation), so assert the git phase worked and no binary is missing.
+    # Manual rollback against a real local git repo (no remote): the git phase
+    # must run and rewind the flake checkout by one commit. The trailing
+    # `nixos-rebuild switch --rollback` step may legitimately fail (a fresh VM
+    # has only one generation), so assert the git phase worked and no binary
+    # is missing.
     machine.succeed("systemctl start hermes-rollback.service || true")
     machine.succeed("git -C /var/lib/hermes-deploy log --oneline -1 | grep -q 'gen 1'")
     machine.succeed("! journalctl -u hermes-rollback.service --no-pager | grep -q 'command not found'")
+
+    # Manual deploy against a real local git repo (no remote): the git phase
+    # must run and commit the working tree on top of the current HEAD.
+    machine.succeed("systemctl start hermes-deploy.service || true")
+    machine.succeed("git -C /var/lib/hermes-deploy log --oneline -2 | grep -q 'deploy'")
 
     print("integration test passed")
   '';

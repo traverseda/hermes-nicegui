@@ -37,12 +37,13 @@
   '';
   services.hermes-deploy.gracePeriod = 30;
 
-  # The real box has the flake cloned into /var/lib/hermes-deploy; the VM
-  # starts empty. Give the deploy/rollback machinery a real git repo (a local
-  # bare origin, two commits on `main`) so the git phases are actually
-  # exercised instead of dying on `git: command not found`. Runs as a systemd
-  # service, not an activation script: activation runs from the initrd where
-  # git is not on PATH.
+  # The real box has the flake copied into /var/lib/hermes-deploy; the VM
+  # starts empty. Give the deploy/rollback machinery a real local git repo
+  # (two commits on `main`, HEAD at the newest — no remote, matching the
+  # production design) so the git phases are actually exercised instead of
+  # dying on `git: command not found`. Runs as a systemd service, not an
+  # activation script: activation runs from the initrd where git is not on
+  # PATH.
   systemd.services.hermes-git-repo = {
     description = "Test fixture: bootstrap a git repo in /var/lib/hermes-deploy";
     wantedBy = [ "multi-user.target" ];
@@ -53,18 +54,12 @@
     };
     script = ''
       if [ ! -d /var/lib/hermes-deploy/.git ]; then
-        git init --bare -q /tmp/hermes-origin.git
-        git clone -q /tmp/hermes-origin.git /var/lib/hermes-deploy
+        git init -q /var/lib/hermes-deploy
         git -C /var/lib/hermes-deploy config user.email test@example.com
         git -C /var/lib/hermes-deploy config user.name test
-        # The deploy tracks `main`; a fresh clone of an empty repo is on
-        # git's default branch (master), so switch explicitly.
         git -C /var/lib/hermes-deploy checkout -q -b main
         git -C /var/lib/hermes-deploy commit -q --allow-empty -m "gen 1"
         git -C /var/lib/hermes-deploy commit -q --allow-empty -m "gen 2"
-        git -C /var/lib/hermes-deploy push -q -u origin main
-        # Simulate a working tree one commit behind origin, like a real checkout.
-        git -C /var/lib/hermes-deploy reset -q --hard origin/main~1
       fi
     '';
   };
