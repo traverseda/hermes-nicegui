@@ -61,6 +61,7 @@
         ./modules/hindsight.nix
         ./modules/exposure.nix
         ./modules/cloudflare-tunnel.nix
+        ./modules/xaelwiki.nix
       ];
 
       hermes = lib.nixosSystem {
@@ -115,6 +116,9 @@
         };
         cloudflare-tunnel-config-check = import ./tests/cloudflare-tunnel-config-check.nix {
           inherit nixpkgs;
+        };
+        xaelwiki-config-check = import ./tests/xaelwiki-config-check.nix {
+          inherit nixpkgs hermes-agent;
         };
       };
 

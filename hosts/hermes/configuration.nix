@@ -103,6 +103,18 @@
     owner = "root";
     mode = "0400";
   };
+  age.secrets."xaelwiki-env" = {
+    file = ../../secrets/xaelwiki-env.age;
+    owner = "xaelwiki";
+    group = "xaelwiki";
+    mode = "0440";
+  };
+  age.secrets."xaelwiki-ssh" = {
+    file = ../../secrets/xaelwiki-ssh.age;
+    owner = "xaelwiki";
+    group = "xaelwiki";
+    mode = "0440";
+  };
 
   services.hermes-agent.environmentFiles = [
     config.age.secrets."hermes-env".path
@@ -140,6 +152,17 @@
   services.cloudflare-tunnel = {
     enable = true;
     credentialsFile = config.age.secrets."cloudflare-tunnel".path;
+  };
+
+  # ── xaelwiki notes MCP server ────────────────────────────────────────
+  # Editable, low-stakes, independently revertible. Source runs live from the
+  # vendor/xaelWiki submodule (symlinked into the run location); notes vault is
+  # a git clone of codeberg notes.git via the xaelwiki SSH deploy key. The MCP
+  # bearer token comes from xaelwiki-env; the deploy key from xaelwiki-ssh.
+  services.xaelwiki = {
+    enable = true;
+    environmentFile = config.age.secrets."xaelwiki-env".path;
+    sshKeyFile = config.age.secrets."xaelwiki-ssh".path;
   };
 
   # ── Nix ──────────────────────────────────────────────────────────────

@@ -100,6 +100,12 @@ pkgs.runCommand "hermes-config-check"
     ${need "rolling back exactly one generation" "watchdog.script"}
     ${need "not auto-rolling back" "watchdog.script"}
 
+    # ── submodules (vendor/xaelWiki) are materialized, never force-reset ─
+    # `submodule update --init` (no --force) means the editable xaelwiki
+    # source survives deploys; a fresh checkout still gets materialized.
+    ${need "submodule update --init" "deploy.script"}
+    ${need "submodule update --init" "rollback.script"}
+
     # ── agent gateway unit exists (hardened) and is enabled ────────────
     ${need "NoNewPrivileges" "agent.unit"}
     ${need "ProtectSystem=strict" "agent.unit"}

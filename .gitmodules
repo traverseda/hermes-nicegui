@@ -1,0 +1,3 @@
+[submodule "vendor/xaelWiki"]
+	path = vendor/xaelWiki
+	url = https://github.com/traverseda/xaelWiki.git

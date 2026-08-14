@@ -34,6 +34,8 @@ during initial creation** (see below) — otherwise agenix can't decrypt.
 | `api-server-env.age`     | `/run/agenix/api-server-env` | default profile `.env` (API_SERVER_KEY for the multiplexed api_server) |
 | `dashboard-env.age`      | `/run/agenix/dashboard-env` | default profile `.env` (dashboard basic-auth credentials) |
 | `cloudflare-tunnel.age`  | `/run/agenix/cloudflare-tunnel` | Cloudflare Tunnel credentials (`services.cloudflare-tunnel`) |
+| `xaelwiki-env.age`       | `/run/agenix/xaelwiki-env` | xaelwiki MCP bearer token (`XAEL_AUTH_TOKEN`) |
+| `xaelwiki-ssh.age`       | `/run/agenix/xaelwiki-ssh` | SSH deploy key for the notes vault (`services.xaelwiki`) |
 
 `hermes-env` is a plain `KEY=value` file:
 
@@ -125,6 +127,28 @@ Keep the value in sync with `services.cloudflare-tunnel.tunnelId` in
 `hosts/hermes/configuration.nix`. Note: this is NOT the `eyJ…` token used by
 remotely-managed tunnels (that format is for `cloudflared tunnel run --token`,
 which the nixpkgs `services.cloudflared` module does not support).
+
+`xaelwiki-env` is a plain `KEY=value` file gating the xaelwiki notes MCP server:
+
+```
+XAEL_AUTH_TOKEN=<random token, min 16 chars>
+```
+
+The token is used by the server (HTTP bearer auth) and by hermes-agent's MCP
+client (interpolated from `.env` at runtime — never stored in config.yaml).
+
+`xaelwiki-ssh` is the raw SSH private key (ed25519, no surrounding text) for
+the notes vault deploy key (`xaelwiki@notes.lan`, write-enabled on
+`codeberg.org/traverseda/notes`). It lets the xaelwiki service clone and push
+the shared notes repo. It must be kept in sync with the Codeberg/Forgejo deploy
+key registration. To inspect or rotate either secret:
+
+```sh
+nix develop
+agenix -e secrets/xaelwiki-env.age     # edit the token
+agenix -e secrets/xaelwiki-ssh.age     # view/replace the deploy key
+agenix --rekey -e secrets/xaelwiki-ssh.age
+```
 
 ## Setup
 

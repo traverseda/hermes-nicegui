@@ -54,8 +54,10 @@ modules/hermes-dashboard.nix     # web dashboard (hermesagent.lan:9119)
 modules/hindsight.nix            # Hindsight memory service (podman, tailnet-only)
 modules/exposure.nix             # tailnet-exposure registry (auth enforced)
 modules/cloudflare-tunnel.nix    # public exposure via Cloudflare Tunnel (outbound-only)
+modules/xaelwiki.nix             # xaelwiki notes MCP server (editable, low-stakes)
 modules/llm.nix                  # generic preferred-model config (hermesDeploy.llm)
 skills/                          # curated, NixOS-corrected skills (external_dirs)
+vendor/xaelWiki/                 # xaelwiki source (git submodule, editable on the LXC)
 tests/vm-configuration.nix       # local test VM config
 tests/hermes-test.nix            # NixOS integration test (runtime; slow)
 tests/hermes-config-check.nix    # fast eval-time deploy/rollback wiring check
@@ -103,7 +105,7 @@ scp secrets/lxc-host-ed25519        root@<ct-ip>:/etc/ssh/ssh_host_ed25519_key
 scp secrets/lxc-host-ed25519.pub    root@<ct-ip>:/etc/ssh/ssh_host_ed25519_key.pub
 ssh root@<ct-ip> "chmod 0600 /etc/ssh/ssh_host_ed25519_key"
 # set up agenix secrets (secrets/README.md) — incl. the tailscale auth key
-git clone <this-repo> /var/lib/hermes-deploy
+git clone --recurse-submodules <this-repo> /var/lib/hermes-deploy
 ```
 
 From then on the LXC rebuilds *itself* from that git checkout.
@@ -304,6 +306,39 @@ registry above is untouched. `services.cloudflare-tunnel` (in
   hit the service's own auth (dashboard basic-auth, hindsight bearer, HA
   `API_SERVER_KEY`). The public hostnames on `0u0.ca` / `outsidecontext.solutions`
   live in the tunnel ingress table and/or Cloudflare's dashboard.
+
+## xaelwiki notes MCP server (editable, low-stakes)
+
+`services.xaelwiki` runs the [xaelwiki](https://github.com/traverseda/xaelWiki)
+notes MCP server as a tailnet-only HTTP service, wired into the hermes agent as
+an MCP server so the agent can search, capture, and **edit** shared markdown
+notes. It is designed to be **fast to iterate on and independently revertible**
+— it is explicitly non-critical:
+
+- **Editable source, no rebuild.** xaelwiki's code ships as a git **submodule**
+  (`vendor/xaelWiki/`) and the service runs the checkout directly from a Nix
+  python env (`PYTHONPATH` points at the run-location symlink). Edit
+  `vendor/xaelWiki/src/xaelwiki/*.py` on the LXC, then
+  `systemctl restart xaelwiki` — no `nixos-rebuild`. A broken xaelwiki only
+  takes down notes, never the agent.
+- **Roll back separately.** The submodule is its own git repo. Roll it back
+  with `git -C /var/lib/hermes-deploy/vendor/xaelWiki checkout <good-rev>` (or
+  `git revert`), independent of Nix generations. The deploy flow runs
+  `git submodule update --init` (never `--force`), so local edits survive
+  deploys.
+- **Shared notes vault.** Notes live in their own git repo, cloned from
+  `ssh://git@codeberg.org/traverseda/notes.git` with a dedicated SSH deploy key
+  (`xaelwiki-ssh` secret). The server auto-pulls before each mutation and
+  auto-pushes after, keeping the LXC vault in sync with the operator's
+  `~/Code/personal/xaelWiki/notes`.
+- **Editable by default.** `XAEL_READ_ONLY` is off — the agent has the full
+  write surface (capture / append / update / move / tag / undo). Safety comes
+  from xaelwiki itself: no delete (archive instead), auto-commit on every
+  mutation, optimistic concurrency via `revision`, git-backed undo.
+- **Credential-enforced.** The MCP endpoint is registered in the exposure
+  registry (bearer auth); hermes-agent connects over `127.0.0.1` with the same
+  token from the `xaelwiki-env` secret, interpolated at runtime — the literal
+  token never reaches config.yaml or the store.
 
 **OpenCode is wired in** via the repo's `opencode.json`: the
 `@vectorize-io/opencode-hindsight` plugin points at

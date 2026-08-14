@@ -50,6 +50,10 @@ let
     git -C ${cfg.repoDir} fetch origin
     git -C ${cfg.repoDir} checkout -f origin/${cfg.branch}
     git -C ${cfg.repoDir} reset --hard origin/${cfg.branch}
+    # Materialize git submodules (e.g. vendor/xaelWiki) on first sync. Never
+    # --force: local edits inside a submodule (xaelwiki source) must survive
+    # deploys — that is the "editable, low-stakes" design.
+    git -C ${cfg.repoDir} submodule update --init 2>/dev/null || true
 
     PREV_GEN=$(${currentGeneration})
     log "previous generation: $PREV_GEN"
@@ -82,6 +86,7 @@ let
     git -C ${cfg.repoDir} fetch origin
     git -C ${cfg.repoDir} checkout -f origin/${cfg.branch}
     git -C ${cfg.repoDir} reset --hard origin/${cfg.branch}~1 || true
+    git -C ${cfg.repoDir} submodule update --init 2>/dev/null || true
 
     log "rolling back system by one generation"
     nixos-rebuild switch --rollback 2>&1 | tee -a /var/log/hermes-deploy.log
