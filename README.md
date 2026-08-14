@@ -49,13 +49,20 @@ hosts/hermes/configuration.nix   # Proxmox LXC host config
 modules/hermes-service.nix       # hermes-agent + tailscale (shared w/ tests)
 modules/hermes-skills.nix        # vendored skills wiring (no bundled skills)
 modules/hermes-deploy.nix        # deploy/rollback/watchdog machinery
+modules/hermes-ha.nix            # Home Assistant profile api_server + proxy
+modules/hermes-dashboard.nix     # web dashboard (hermesagent.lan:9119)
 modules/hindsight.nix            # Hindsight memory service (podman, tailnet-only)
+modules/exposure.nix             # tailnet-exposure registry (auth enforced)
+modules/cloudflare-tunnel.nix    # public exposure via Cloudflare Tunnel (outbound-only)
 modules/llm.nix                  # generic preferred-model config (hermesDeploy.llm)
 skills/                          # curated, NixOS-corrected skills (external_dirs)
 tests/vm-configuration.nix       # local test VM config
 tests/hermes-test.nix            # NixOS integration test (runtime; slow)
 tests/hermes-config-check.nix    # fast eval-time deploy/rollback wiring check
 tests/hindsight-config-check.nix # fast eval-time Hindsight wiring check
+tests/dashboard-config-check.nix # fast eval-time dashboard wiring check
+tests/exposure-config-check.nix  # fast eval-time exposure/auth guardrails
+tests/cloudflare-tunnel-config-check.nix # fast eval-time tunnel wiring check
 scripts/deploy.sh                # deploy to the LXC (--snapshot option)
 scripts/rollback.sh              # step back one generation
 scripts/test.sh                  # nix flake check / local VM / integration test
@@ -220,6 +227,83 @@ run under rootful podman via `virtualisation.oci-containers`.
 
 Other tools on the tailnet can point a `HindsightClient` at
 `http://<tailscale-ip>:8888`.
+
+## Hermes web dashboard
+
+The agent's web admin panel (`hermes dashboard`) runs as
+`hermes-dashboard.service` and is exposed on **`http://hermesagent.lan:9119`**
+over the tailnet only (firewall opens 9119 on `tailscale0`; everything else
+is firewalled off).
+
+- **Auth:** binding a non-loopback host always engages the dashboard's own
+  auth gate (there is no unauthenticated public-bind option). We use the
+  bundled `basic` username/password provider — sessions are stateless
+  HMAC-signed tokens, no OAuth IDP needed.
+- **Credentials:** `HERMES_DASHBOARD_BASIC_AUTH_USERNAME` /
+  `_PASSWORD_HASH` / `_SECRET` live in the `dashboard-env` agenix secret and
+  are appended to the default profile's `.env` (`secrets/README.md`). No
+  secrets in Nix config.
+- **Rotate the password:** `agenix -e secrets/dashboard-env.age`, replace
+  `_PASSWORD_HASH` (see secrets/README.md for the scrypt one-liner), commit,
+  deploy.
+- The unit is named `hermes-dashboard.service` — the canonical name `hermes
+  update` restarts a managed dashboard instead of raw-killing the PID.
+
+## Tailnet exposure registry (no credentials, no deploy)
+
+Every port opened on the tailnet goes through a single registry —
+`hermesDeploy.exposure.services` in `modules/exposure.nix` — so "expose a
+service" and "prove it has credentials" are one declaration. The registry
+**fails the build** (not warns) when:
+
+- a credentialed exposure (`auth.type = bearer|basic|oauth`) is enabled but
+  its credential source (agenix secret / env file) is not wired;
+- a service is exposed with `auth.type = "none"` unless it explicitly opts
+  in with `auth.insecure = true` **and** the global
+  `hermesDeploy.exposure.allowInsecure = true` is set (a double opt-in);
+- any port is opened on `tailscale0` that is not declared in the registry
+  (so a host config or a new module can't silently open an extra port).
+
+The firewall rule itself is *derived* from the registry — service modules no
+longer touch `networking.firewall.interfaces.tailscale0` directly, so an open
+port and a credentialed service can't drift apart. `tests/exposure-config-check.nix`
+proves all three guardrails fire.
+
+Current exposures: hindsight API `:8888` (bearer key), hindsight control
+plane `:9999` (off unless enabled; bearer key), Home Assistant proxy `:8444`
+(bearer `API_SERVER_KEY`), web dashboard `:9119` (basic auth).
+
+## Cloudflare Tunnel (public exposure)
+
+Public exposure is opt-in and outbound-only: `cloudflared` on the LXC dials
+out to Cloudflare, so **no inbound port is opened** and the tailnet-exposure
+registry above is untouched. `services.cloudflare-tunnel` (in
+`modules/cloudflare-tunnel.nix`) wires the pinned nixpkgs
+`services.cloudflared` module:
+
+- **Locally-managed tunnel.** The tunnel credentials (a JSON file with
+  `AccountTag`/`TunnelID`/`TunnelSecret`) come from the `cloudflare-tunnel`
+  agenix secret — never Nix config. Set the real `tunnelId` to match the
+  credentials file (see `secrets/README.md`).
+- **Ingress is credential-enforced — same mechanism as the tailnet.** Each
+  ingress value must be a `name` from `hermesDeploy.exposure.services`, and
+  the public URL is derived from that exposure's port. The build fails if an
+  ingress references an unknown exposure, an uncredentialed one, or an
+  `auth.type = "none"` service (the insecure opt-in is tailnet-only, never
+  allowed on the public internet).
+- **Nothing is public until you add an ingress rule.** The module starts with
+  an empty `ingress` table and a `http_status:404` catch-all, so "wired but
+  not exposed" genuinely exposes nothing. Going public is one deliberate edit:
+  ```nix
+  services.cloudflare-tunnel.ingress = {
+    "dashboard.0u0.ca" = "hermes-dashboard";   # name from the exposure registry
+  };
+  ```
+  The module warns when ingress is non-empty.
+- **Front it with credentials.** Hostnames published through the tunnel still
+  hit the service's own auth (dashboard basic-auth, hindsight bearer, HA
+  `API_SERVER_KEY`). The public hostnames on `0u0.ca` / `outsidecontext.solutions`
+  live in the tunnel ingress table and/or Cloudflare's dashboard.
 
 **OpenCode is wired in** via the repo's `opencode.json`: the
 `@vectorize-io/opencode-hindsight` plugin points at

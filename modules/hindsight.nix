@@ -342,12 +342,40 @@ in
       };
     };
 
-    # Tailnet-only: only the tailscale interface may reach the API (and the
-    # control plane if enabled). Everything else stays firewalled off.
-    networking.firewall.interfaces.tailscale0.allowedTCPPorts = [
-      cfg.apiPort
+    # Tailnet exposure: the registry opens :apiPort (and :controlPlanePort
+    # when the control plane is enabled) on tailscale0 AND fails the build
+    # if no credentials are wired. The API key requirement is enforced via
+    # `enableApiKeyAuth`; toggling it off is an unauthenticated exposure and
+    # must go through the registry's `insecure` opt-in (which also demands
+    # the global `allowInsecure` gate).
+    hermesDeploy.exposure.services = [
+      {
+        name = "hindsight-api";
+        port = cfg.apiPort;
+        auth =
+          if cfg.enableApiKeyAuth then
+            {
+              type = "bearer";
+              credentialsConfigured = cfg.environmentFile != null;
+            }
+          else
+            {
+              type = "none";
+              insecure = false;
+            };
+      }
     ]
-    ++ lib.optionals cfg.enableControlPlane [ cfg.controlPlanePort ];
+    ++ lib.optionals cfg.enableControlPlane [
+      {
+        name = "hindsight-control-plane";
+        port = cfg.controlPlanePort;
+        auth = {
+          # HINDSIGHT_CP_ACCESS_KEY from the same env file.
+          type = "bearer";
+          credentialsConfigured = cfg.environmentFile != null;
+        };
+      }
+    ];
 
     # The embedded pg0 data dir must be writable by the container's uid (1000).
     system.activationScripts.hindsight-state = lib.stringAfter [ "users" ] ''

@@ -18,6 +18,7 @@ let
       modules = [
         ../modules/llm.nix
         ../modules/hindsight.nix
+        ../modules/exposure.nix
         {
           services.hindsight = {
             enable = true;

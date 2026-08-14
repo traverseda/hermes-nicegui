@@ -92,6 +92,17 @@
     owner = "root";
     mode = "0440";
   };
+  age.secrets."dashboard-env" = {
+    file = ../../secrets/dashboard-env.age;
+    owner = "hermes";
+    group = "hermes";
+    mode = "0440";
+  };
+  age.secrets."cloudflare-tunnel" = {
+    file = ../../secrets/cloudflare-tunnel.age;
+    owner = "root";
+    mode = "0400";
+  };
 
   services.hermes-agent.environmentFiles = [
     config.age.secrets."hermes-env".path
@@ -107,6 +118,28 @@
   services.hermes-ha = {
     enable = true;
     apiServerKeyFile = config.age.secrets."api-server-env".path;
+  };
+
+  # ── Hermes web dashboard ─────────────────────────────────────────────
+  # Web admin panel (`hermes dashboard`), exposed on hermesagent.lan:9119
+  # over the tailnet only. Binding 0.0.0.0 engages the dashboard's own auth
+  # gate; the `basic` (username/password) provider reads its credentials
+  # from the dashboard-env agenix secret, appended to the default profile's
+  # .env — same pattern as the API_SERVER_KEY / hindsight keys.
+  services.hermes-dashboard = {
+    enable = true;
+    environmentFile = config.age.secrets."dashboard-env".path;
+  };
+
+  # ── Cloudflare Tunnel ───────────────────────────────────────────────
+  # Public exposure for selected services, outbound-only (cloudflared dials
+  # out to Cloudflare; no inbound port is opened). Locally-managed tunnel:
+  # the credentials JSON comes from the agenix secret. Ingress is empty so
+  # NOTHING is publicly routable yet — add hostname → service entries here
+  # (and set the real tunnelId) to deliberately go public.
+  services.cloudflare-tunnel = {
+    enable = true;
+    credentialsFile = config.age.secrets."cloudflare-tunnel".path;
   };
 
   # ── Nix ──────────────────────────────────────────────────────────────

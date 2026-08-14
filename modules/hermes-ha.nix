@@ -84,9 +84,7 @@ let
         yaml.dump(deep_merge(existing, nix), f, default_flow_style=False, sort_keys=False)
   '';
 
-  envFileContent = lib.concatStringsSep "\n" (
-    lib.mapAttrsToList (k: v: "${k}=${v}") cfg.environment
-  );
+  envFileContent = lib.concatStringsSep "\n" (lib.mapAttrsToList (k: v: "${k}=${v}") cfg.environment);
 
   # Provider/secret env files shared into the profile — everything EXCEPT the
   # api_server key file, which belongs only to the default profile's listener.
@@ -168,7 +166,25 @@ in
       API_SERVER_PORT = toString cfg.apiServerPort;
       API_SERVER_HOST = "127.0.0.1";
     };
-    services.hermes-agent.environmentFiles = lib.optionals (cfg.apiServerKeyFile != null) [ cfg.apiServerKeyFile ];
+    services.hermes-agent.environmentFiles = lib.optionals (cfg.apiServerKeyFile != null) [
+      cfg.apiServerKeyFile
+    ];
+
+    # Tailnet exposure: the registry opens :${proxyPort} on tailscale0 AND
+    # fails the build if no API_SERVER_KEY is wired. Without the key the
+    # api_server listener (and therefore /p/ha/) never starts, so an
+    # exposure with credentialsConfigured = false is a broken AND
+    # unauthenticated endpoint — better to refuse to build.
+    hermesDeploy.exposure.services = [
+      {
+        name = "hermes-ha";
+        port = cfg.proxyPort;
+        auth = {
+          type = "bearer";
+          credentialsConfigured = cfg.apiServerKeyFile != null;
+        };
+      }
+    ];
 
     # Same declarative defaults as the main agent, scoped to the ha profile.
     services.hermes-ha.settings = {
@@ -183,7 +199,10 @@ in
       # session schema, AND `toolsets: [kanban]` must be present for the
       # kanban tools' check_fn to pass in normal (non-worker) sessions — the
       # `all`/`*` wildcard deliberately does not enable kanban.
-      platform_toolsets.api_server = [ "hermes-api-server" "kanban" ];
+      platform_toolsets.api_server = [
+        "hermes-api-server"
+        "kanban"
+      ];
       toolsets = [ "kanban" ];
     };
 
@@ -191,8 +210,14 @@ in
     systemd.services.hermes-ha-proxy = {
       description = "Home Assistant profile API reverse proxy (${cfg.profile} → :${toString cfg.proxyPort})";
       wantedBy = [ "multi-user.target" ];
-      after = [ "hermes-agent.service" "network-online.target" ];
-      wants = [ "hermes-agent.service" "network-online.target" ];
+      after = [
+        "hermes-agent.service"
+        "network-online.target"
+      ];
+      wants = [
+        "hermes-agent.service"
+        "network-online.target"
+      ];
       serviceConfig = {
         ExecStart = proxyScript;
         Restart = "always";
@@ -205,9 +230,6 @@ in
         ];
       };
     };
-
-    # Expose the proxy port on the tailnet (HA reaches hermesagent.lan:8444).
-    networking.firewall.interfaces.tailscale0.allowedTCPPorts = [ cfg.proxyPort ];
 
     # ── ha profile bootstrap (declarative `hermes profile create`) ─────
     system.activationScripts."hermes-ha-setup" = lib.stringAfter [ "hermes-agent-setup" ] ''
@@ -232,12 +254,14 @@ in
       cat > "$ENV_FILE" <<'HERMES_HA_ENV_EOF'
       ${envFileContent}
       HERMES_HA_ENV_EOF
-      ${lib.concatStringsSep "\n" (map (f: ''
-        if [ -f "${f}" ]; then
-          echo "" >> "$ENV_FILE"
-          cat "${f}" >> "$ENV_FILE"
-        fi
-      '') profileEnvFiles)}
+      ${lib.concatStringsSep "\n" (
+        map (f: ''
+          if [ -f "${f}" ]; then
+            echo "" >> "$ENV_FILE"
+            cat "${f}" >> "$ENV_FILE"
+          fi
+        '') profileEnvFiles
+      )}
       ${lib.optionalString (cfg.environmentFile != null) ''
         if [ -f "${cfg.environmentFile}" ]; then
           echo "" >> "$ENV_FILE"
@@ -261,9 +285,5 @@ in
       chown ${agent.user}:${agent.group} "${lib.escapeShellArg (profileHome + "/.managed")}"
       chmod 0644 "${lib.escapeShellArg (profileHome + "/.managed")}"
     '';
-
-    warnings = lib.optionals (cfg.apiServerKeyFile == null) [
-      "services.hermes-ha: no apiServerKeyFile set — API_SERVER_KEY is missing and the api_server platform (and therefore /p/${cfg.profile}/) will not start."
-    ];
   };
 }

@@ -56,8 +56,11 @@
         ./modules/hermes-skills.nix
         ./modules/hermes-deploy.nix
         ./modules/hermes-ha.nix
+        ./modules/hermes-dashboard.nix
         ./modules/llm.nix
         ./modules/hindsight.nix
+        ./modules/exposure.nix
+        ./modules/cloudflare-tunnel.nix
       ];
 
       hermes = lib.nixosSystem {
@@ -102,6 +105,15 @@
           inherit nixpkgs hermes-agent;
         };
         hindsight-config-check = import ./tests/hindsight-config-check.nix {
+          inherit nixpkgs;
+        };
+        dashboard-config-check = import ./tests/dashboard-config-check.nix {
+          inherit nixpkgs hermes-agent;
+        };
+        exposure-config-check = import ./tests/exposure-config-check.nix {
+          inherit nixpkgs;
+        };
+        cloudflare-tunnel-config-check = import ./tests/cloudflare-tunnel-config-check.nix {
           inherit nixpkgs;
         };
       };

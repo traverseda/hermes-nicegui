@@ -32,6 +32,8 @@ during initial creation** (see below) — otherwise agenix can't decrypt.
 | `tailscale-auth.age`     | `/run/agenix/tailscale-auth` | `services.tailscale.authKeyFile` |
 | `hindsight-env.age`      | `/run/agenix/hindsight-env` | Hindsight container env file   |
 | `api-server-env.age`     | `/run/agenix/api-server-env` | default profile `.env` (API_SERVER_KEY for the multiplexed api_server) |
+| `dashboard-env.age`      | `/run/agenix/dashboard-env` | default profile `.env` (dashboard basic-auth credentials) |
+| `cloudflare-tunnel.age`  | `/run/agenix/cloudflare-tunnel` | Cloudflare Tunnel credentials (`services.cloudflare-tunnel`) |
 
 `hermes-env` is a plain `KEY=value` file:
 
@@ -60,6 +62,29 @@ the default profile) and is appended to that profile's `.env` via
 `services.hermes-ha.apiServerKeyFile`. The `ha` profile served under
 `/p/ha/` shares the listener and inherits provider keys from `hermes-env`.
 
+`dashboard-env` is a plain `KEY=value` file gating the web dashboard
+(`hermesagent.lan:9119`, tailnet-only). The dashboard binds a non-loopback
+host, which always engages its auth gate; we use the bundled `basic`
+username/password provider, configured purely through env vars (the
+preferred `password_hash` form — no plaintext at rest):
+
+```
+HERMES_DASHBOARD_BASIC_AUTH_USERNAME=admin
+HERMES_DASHBOARD_BASIC_AUTH_PASSWORD_HASH=scrypt$16384$8$1$<salt_b64>$<dk_b64>
+HERMES_DASHBOARD_BASIC_AUTH_SECRET=<32+ random bytes, base64>
+```
+
+The file is appended to the default profile's `.env` via
+`services.hermes-dashboard.environmentFile`. To rotate the password:
+
+```sh
+nix develop
+# compute a fresh scrypt hash:
+python3 -c "import base64,hashlib,secrets; p=b'NEW_PASSWORD'; s=secrets.token_bytes(16); d=hashlib.scrypt(p,salt=s,n=2**14,r=8,p=1,dklen=32,maxmem=0); print(f'scrypt\$16384\$8\$1\${base64.b64encode(s).decode()}\${base64.b64encode(d).decode()}')"
+agenix -e secrets/dashboard-env.age   # replace the _PASSWORD_HASH line, keep the rest
+agenix --rekey -e secrets/dashboard-env.age
+```
+
 `hindsight-env` is also a plain `KEY=value` file:
 
 ```
@@ -75,6 +100,31 @@ The LLM *endpoint* and *model* are not secrets — they live in Nix as
 `tailscale-auth.age` is **not managed in Nix** — the pre-auth key comes from
 the Tailscale admin console and is left to the operator to fill in by hand
 before first boot (an empty file is committed so the flake builds).
+
+`cloudflare-tunnel.age` holds the Cloudflare Tunnel credentials for the
+locally-managed tunnel (`services.cloudflare-tunnel`). The committed copy is
+the Cloudflare tunnel token the operator provided; for the tunnel to connect,
+this file must instead contain the tunnel **credentials JSON**:
+
+```json
+{ "AccountTag": "…", "TunnelID": "…", "TunnelSecret": "…" }
+```
+
+Generate it with `cloudflared tunnel login` / `cloudflared tunnel create <name>`
+(`~/.cloudflared/<tunnel-id>.json`), then:
+
+```sh
+nix develop
+cp ~/.cloudflared/<tunnel-id>.json /tmp/cf-creds.json
+age -e -r "$(cat ~/.ssh/id_ed25519.pub)" -r "$(cat secrets/lxc-host-ed25519.pub)" \
+  -o secrets/cloudflare-tunnel.age /tmp/cf-creds.json
+rm /tmp/cf-creds.json
+```
+
+Keep the value in sync with `services.cloudflare-tunnel.tunnelId` in
+`hosts/hermes/configuration.nix`. Note: this is NOT the `eyJ…` token used by
+remotely-managed tunnels (that format is for `cloudflared tunnel run --token`,
+which the nixpkgs `services.cloudflared` module does not support).
 
 ## Setup
 
