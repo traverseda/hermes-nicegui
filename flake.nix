@@ -55,6 +55,7 @@
         ./modules/hermes-service.nix
         ./modules/hermes-skills.nix
         ./modules/hermes-deploy.nix
+        ./modules/hermes-tools.nix
         ./modules/hermes-ha.nix
         ./modules/hermes-dashboard.nix
         ./modules/llm.nix
@@ -118,6 +119,9 @@
           inherit nixpkgs;
         };
         xaelwiki-config-check = import ./tests/xaelwiki-config-check.nix {
+          inherit nixpkgs hermes-agent;
+        };
+        tools-config-check = import ./tests/tools-config-check.nix {
           inherit nixpkgs hermes-agent;
         };
       };

@@ -36,10 +36,50 @@ one of those paths is routed through a mechanism that can be undone:
 Hermes runs in **native mode** (hardened systemd unit, `NoNewPrivileges`,
 `ProtectSystem=strict`). It cannot `apt`/`pip`/`npm`-install itself — the only
 tools on its PATH are the ones declared in `modules/hermes-service.nix`. To
-gain a capability, the bot must edit the flake → git → new generation. That's
-what makes every self-change rollback-safe. (If you want a mode where the bot
-*can* install packages, flip `services.hermes-agent.container.enable = true`
-for an isolated Ubuntu container — documented upstream.)
+gain a **system** capability (a new package, daemon, firewall rule, secret),
+the bot must edit the flake → git → new generation — that's what makes system
+self-change rollback-safe. **Content** (skills, scripts, MCP servers) does NOT
+need the flake: it goes through the git-backed content store below, which has
+its own mechanical rollback. (If you want a mode where the bot *can* install
+packages, flip `services.hermes-agent.container.enable = true` for an isolated
+Ubuntu container — documented upstream.)
+
+## Two change lanes: content vs system
+
+The core unit of work on this deployment is **creating new tools** (skills,
+scripts, MCP servers) — and most of them are NOT critical for the gateway to
+run. Routing every one through a Nix rebuild + new generation is monolithic
+and slow. So there are two lanes:
+
+| | System lane (Nix) | Content lane (`hermes-tool`) |
+|---|---|---|
+| What changes | gateway unit, packages, firewall, secrets, daemons | skills, tool scripts, MCP servers, config.yaml |
+| How it ships | flake edit → `nixos-rebuild switch` → generation | `hermes-tool` → auto-commit → git |
+| Rollback | `hermes-rollback` (one generation) | `hermes-tool revert` (to `content-good`) |
+| Restart cost | full gateway restart | skills: none · bin: none · MCP: gateway restart only |
+| Owner | this flake repo | `/var/lib/hermes/content` (own git repo) |
+
+- **Skills** land in `$HERMES_HOME/skills` (symlinked from the store) and are
+  picked up next session — no restart. **Tool scripts** are appended to the
+  gateway PATH (lowest precedence) — available next turn. **MCP servers**
+  register via `hermes mcp add` (survives rebuilds; the config merge preserves
+  user keys) and need only a gateway restart, not a rebuild.
+- **Code writing is delegated to opencode** — the bot scaffolds, reviews, and
+  installs; opencode writes. See the `hermes-tooling` skill.
+- The bot *never* edits the system lane directly; `hermes-tool` can't touch it.
+- Commands: `hermes-tool skill new / tool add / mcp add / commit /
+  mark-good / revert / status` (see `scripts/hermes-tool.sh`).
+
+### Content recovery is still rollback-safe
+
+The content store is a **git repo** (`/var/lib/hermes/content`); every
+mutation auto-commits. `hermes-tool revert` restores the last-known-good git
+tag `content-good` *and* the known-good config.yaml, then restarts the
+gateway. It is a **/nix/store binary** — immutable, so it works even if the
+agent has deleted every skill or registered a broken MCP server. The deploy
+watchdog tries `hermes-tool revert` as a cheap first recovery **before**
+spending a Nix generation; generation rollback remains the ultimate floor.
+The one rule that keeps this safe: **verify, then `hermes-tool mark-good`**.
 
 ## Repository layout
 
@@ -49,6 +89,7 @@ hosts/hermes/configuration.nix   # Proxmox LXC host config
 modules/hermes-service.nix       # hermes-agent + tailscale (shared w/ tests)
 modules/hermes-skills.nix        # vendored skills wiring (no bundled skills)
 modules/hermes-deploy.nix        # deploy/rollback/watchdog machinery
+modules/hermes-tools.nix         # git-backed content store + hermes-tool fast path
 modules/hermes-ha.nix            # Home Assistant profile api_server + proxy
 modules/hermes-dashboard.nix     # web dashboard (hermesagent.lan:9119)
 modules/hindsight.nix            # Hindsight memory service (podman, tailnet-only)
@@ -64,9 +105,11 @@ tests/hermes-config-check.nix    # fast eval-time deploy/rollback wiring check
 tests/hindsight-config-check.nix # fast eval-time Hindsight wiring check
 tests/dashboard-config-check.nix # fast eval-time dashboard wiring check
 tests/exposure-config-check.nix  # fast eval-time exposure/auth guardrails
-tests/cloudflare-tunnel-config-check.nix # fast eval-time tunnel wiring check
+  tests/cloudflare-tunnel-config-check.nix # fast eval-time tunnel wiring check
+  tests/tools-config-check.nix   # fast eval-time content-store guardrails
 scripts/deploy.sh                # deploy to the LXC (--snapshot option)
 scripts/rollback.sh              # step back one generation
+scripts/hermes-tool.sh           # content-store CLI source (built by hermes-tools.nix)
 scripts/test.sh                  # nix flake check / local VM / integration test
 scripts/import-proxmox.sh        # build & import the LXC image into Proxmox
 scripts/patch-hermes.sh          # rebuild the hermes-agent fork w/ local patches

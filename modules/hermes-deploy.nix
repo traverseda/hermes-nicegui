@@ -41,6 +41,12 @@ let
 
   healthCheckScript = pkgs.writeShellScript "hermes-health-check" cfg.healthCheck;
 
+  # Content-lane recovery hook: when the agent is unhealthy, try reverting the
+  # fast-path content store (skills/tools/MCP registrations) BEFORE spending a
+  # Nix generation. Set by modules/hermes-tools.nix; empty = no content lane.
+  contentRecoveryScript = lib.optionalString (cfg.contentRecovery != "")
+    (pkgs.writeShellScript "hermes-content-recovery" cfg.contentRecovery);
+
   deployScript = pkgs.writeShellScript "hermes-deploy-script" ''
     set -euo pipefail
 
@@ -70,6 +76,18 @@ let
       echo "$CUR_GEN" > ${cfg.stateDir}/last-known-good
       exit 0
     fi
+
+    ${lib.optionalString (cfg.contentRecovery != "") ''
+      log "AGENT REPORTED UNHEALTHY — trying content recovery first"
+      if timeout ${toString cfg.gracePeriod} bash ${contentRecoveryScript}; then
+        sleep 10
+        if timeout ${toString cfg.gracePeriod} bash ${healthCheckScript}; then
+          echo "content recovery restored health (generation $CUR_GEN)"
+          echo "$CUR_GEN" > ${cfg.stateDir}/last-known-good
+          exit 0
+        fi
+      fi
+    ''}
 
     log "AGENT REPORTED UNHEALTHY — rolling back one generation to $PREV_GEN"
     nixos-rebuild switch "$(readlink -f /nix/var/nix/profiles/system-''${PREV_GEN}-link)" 2>&1 \
@@ -115,6 +133,22 @@ let
     fi
 
     log "unhealthy: agent failed its own health report"
+
+    # Content-lane first: try reverting skills/tools/MCP registrations before
+    # spending a generation. Cheap, no rebuild; content is the likely culprit
+    # for a fast-path change that broke something non-systemic.
+    ${lib.optionalString (cfg.contentRecovery != "") ''
+      log "unhealthy — trying content recovery first"
+      if timeout ${toString cfg.gracePeriod} bash ${contentRecoveryScript}; then
+        sleep 10
+        if timeout ${toString cfg.gracePeriod} bash ${healthCheckScript}; then
+          CUR_GEN=$(${currentGeneration})
+          echo "$CUR_GEN" > "$KNOWN_GOOD"
+          log "content recovery restored health — updated last-known-good to generation $CUR_GEN"
+          exit 0
+        fi
+      fi
+    ''}
 
     if [ ! -f "$KNOWN_GOOD" ]; then
       log "no last-known-good recorded; not auto-rolling back"
@@ -166,6 +200,18 @@ in
       type = lib.types.int;
       default = 120;
       description = "Seconds to wait for the agent's health report after a switch.";
+    };
+
+    contentRecovery = lib.mkOption {
+      type = lib.types.str;
+      default = "";
+      description = ''
+        Command run when the agent is unhealthy, BEFORE falling back to a
+        generation rollback (in both the deploy script and the watchdog). Set
+        by the content-store module (services.hermes-tools) to `hermes-tool
+        revert`, which restores the last-known-good skills/tools/config from
+        git at content granularity — no Nix rebuild. Empty = no content lane.
+      '';
     };
 
     healthCheck = lib.mkOption {

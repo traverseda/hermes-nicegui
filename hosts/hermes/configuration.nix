@@ -54,6 +54,14 @@
     branch = "main";
   };
 
+  # Content-store fast path: agent-authored skills/tools/MCP servers live in a
+  # git-backed store (recovered by `hermes-tool revert`) instead of a Nix
+  # rebuild for every new tool. The deploy watchdog tries this BEFORE a
+  # generation rollback. See modules/hermes-tools.nix.
+  services.hermes-tools = {
+    enable = true;
+  };
+
   # ── Hindsight memory service ─────────────────────────────────────────
   # Standalone agent-memory API (retain/recall/reflect), tailnet-only.
   # Model comes from `hermesDeploy.llm` (defaults to opencode-go /
