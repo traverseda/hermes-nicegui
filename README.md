@@ -96,9 +96,11 @@ modules/hindsight.nix            # Hindsight memory service (podman, tailnet-onl
 modules/exposure.nix             # tailnet-exposure registry (auth enforced)
 modules/cloudflare-tunnel.nix    # public exposure via Cloudflare Tunnel (outbound-only)
 modules/xaelwiki.nix             # xaelwiki notes MCP server (editable, low-stakes)
+modules/hermes-nicegui.nix       # hermes-nicegui web UI (submodule, tunnel-public)
 modules/llm.nix                  # generic preferred-model config (hermesDeploy.llm)
 skills/                          # curated, NixOS-corrected skills (external_dirs)
 vendor/xaelWiki/                 # xaelwiki source (git submodule, editable on the LXC)
+vendor/hermes-nicegui/           # hermes-nicegui source (git submodule, editable on the LXC)
 tests/vm-configuration.nix       # local test VM config
 tests/hermes-test.nix            # NixOS integration test (runtime; slow)
 tests/hermes-config-check.nix    # fast eval-time deploy/rollback wiring check
@@ -293,6 +295,45 @@ is firewalled off).
   deploy.
 - The unit is named `hermes-dashboard.service` — the canonical name `hermes
   update` restarts a managed dashboard instead of raw-killing the PID.
+
+## hermes-nicegui web UI
+
+`services.hermes-nicegui` runs the [hermes-nicegui](https://github.com/traverseda/hermes-nicegui)
+NiceGUI browser UI (profile switcher, sessions, cron, kanban, terminal, files)
+as `hermes-nicegui.service`. It is a *separate* app from `hermes dashboard` —
+it reaches Hermes by running the `hermes` CLI as a subprocess and sharing
+`$HERMES_HOME` with the gateway, so the profile switcher, session browser, and
+cron/chat all see the real agent state.
+
+- **Public via the Cloudflare tunnel.** The unit binds `127.0.0.1:8080`
+  (loopback — no tailnet port, the exposure registry is untouched). Add a
+  public hostname in the Cloudflare dashboard pointing at
+  `http://localhost:8080`; publishing it is a dashboard action, not a flake
+  edit (see the Cloudflare Tunnel section).
+- **Auth is the app's own login.** `HERMES_AUTH_ENABLED` gates the whole app
+  behind a username/password admin account (created on first visit). That
+  single login is the only thing between the public tunnel and a file browser
+  + terminal, so keep it on.
+- **Editable source, no rebuild.** Code ships as the `vendor/hermes-nicegui`
+  git submodule and is symlinked into `/var/lib/hermes-nicegui/src`; edit it
+  on the LXC and `systemctl restart hermes-nicegui` — no `nixos-rebuild`. A
+  broken UI only takes down the UI, never the agent. Roll it back with
+  `git -C /var/lib/hermes-deploy/vendor/hermes-nicegui checkout <good-rev>`.
+- **Plugins work without a pip install.** The built-in plugins are discovered
+  through an `importlib.metadata` entry-point group; the module ships a
+  generated `dist-info` on `PYTHONPATH` next to the live checkout so they
+  resolve against the editable source.
+- **Kanban needs dashboard creds.** The kanban plugin logs into the Hermes
+  dashboard web server with the *plaintext* username/password — the
+  `dashboard-env` secret only has the scrypt hash, so the plaintext lives in a
+  separate `hermes-nicegui-env` agenix secret
+  (`HERMES_KANBAN_USERNAME`/`HERMES_KANBAN_PASSWORD`).
+- **Files is confined to the workspace.** `HERMES_FILES_ROOT` defaults to the
+  agent's workspace (`/var/lib/hermes/workspace`); don't widen it past that,
+  the app is public.
+- **Runs as the hermes user**, colocated with the agent — same user/group,
+  same `$HERMES_HOME`, so the CLI subprocess and direct state reads resolve
+  exactly like the gateway's.
 
 ## Tailnet exposure registry (no credentials, no deploy)
 

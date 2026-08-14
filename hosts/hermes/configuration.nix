@@ -123,6 +123,12 @@
     group = "xaelwiki";
     mode = "0440";
   };
+  age.secrets."hermes-nicegui-env" = {
+    file = ../../secrets/hermes-nicegui-env.age;
+    owner = "hermes";
+    group = "hermes";
+    mode = "0440";
+  };
 
   services.hermes-agent.environmentFiles = [
     config.age.secrets."hermes-env".path
@@ -173,6 +179,21 @@
     enable = true;
     environmentFile = config.age.secrets."xaelwiki-env".path;
     sshKeyFile = config.age.secrets."xaelwiki-ssh".path;
+  };
+
+  # ── hermes-nicegui web UI ────────────────────────────────────────────
+  # Modular NiceGUI browser UI (profile switcher, sessions, cron, kanban,
+  # terminal, files). Runs as the hermes user sharing $HERMES_HOME so the CLI
+  # subprocess + profile switcher see the real agent state. Binds loopback and
+  # is reached PUBLICLY through the Cloudflare tunnel: add a public hostname
+  # in the Cloudflare dashboard pointing at http://localhost:8080 (a dashboard
+  # action, not a flake edit). The app's own login is the auth gate; the
+  # kanban plugin logs into the hermes dashboard with the PLAINTEXT
+  # username/password from the hermes-nicegui-env agenix secret (the
+  # dashboard-env secret only has the scrypt hash).
+  services.hermes-nicegui = {
+    enable = true;
+    environmentFile = config.age.secrets."hermes-nicegui-env".path;
   };
 
   # ── Nix ──────────────────────────────────────────────────────────────

@@ -63,6 +63,7 @@
         ./modules/exposure.nix
         ./modules/cloudflare-tunnel.nix
         ./modules/xaelwiki.nix
+        ./modules/hermes-nicegui.nix
       ];
 
       hermes = lib.nixosSystem {
@@ -122,6 +123,9 @@
           inherit nixpkgs hermes-agent;
         };
         tools-config-check = import ./tests/tools-config-check.nix {
+          inherit nixpkgs hermes-agent;
+        };
+        nicegui-config-check = import ./tests/nicegui-config-check.nix {
           inherit nixpkgs hermes-agent;
         };
       };

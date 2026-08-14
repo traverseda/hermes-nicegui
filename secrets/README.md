@@ -36,6 +36,7 @@ during initial creation** (see below) — otherwise agenix can't decrypt.
 | `cloudflare-tunnel.age`  | `/run/agenix/cloudflare-tunnel` | Cloudflare Tunnel connector token (`services.cloudflare-tunnel`) |
 | `xaelwiki-env.age`       | `/run/agenix/xaelwiki-env` | xaelwiki MCP bearer token (`XAEL_AUTH_TOKEN`) |
 | `xaelwiki-ssh.age`       | `/run/agenix/xaelwiki-ssh` | SSH deploy key for the notes vault (`services.xaelwiki`) |
+| `hermes-nicegui-env.age` | `/run/agenix/hermes-nicegui-env` | hermes-nicegui kanban dashboard login (`services.hermes-nicegui`) |
 
 `hermes-env` is a plain `KEY=value` file:
 
@@ -142,6 +143,25 @@ nix develop
 agenix -e secrets/xaelwiki-env.age     # edit the token
 agenix -e secrets/xaelwiki-ssh.age     # view/replace the deploy key
 agenix --rekey -e secrets/xaelwiki-ssh.age
+```
+
+`hermes-nicegui-env` is a plain `KEY=value` file gating the hermes-nicegui
+kanban plugin's login to the Hermes dashboard web server (`services.hermes-nicegui`):
+
+```
+HERMES_KANBAN_USERNAME=admin
+HERMES_KANBAN_PASSWORD=<plaintext password>
+```
+
+This is the *plaintext* username/password the browser logs into the dashboard
+with (cookie session) — the `dashboard-env` secret only stores the scrypt
+hash, which the dashboard's own auth gate uses, so it can't be reused here.
+Keep the two in sync. To rotate:
+
+```sh
+nix develop
+agenix -e secrets/hermes-nicegui-env.age
+agenix --rekey -e secrets/hermes-nicegui-env.age
 ```
 
 ## Setup

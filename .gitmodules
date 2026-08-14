@@ -1,3 +1,6 @@
 [submodule "vendor/xaelWiki"]
 	path = vendor/xaelWiki
 	url = https://github.com/traverseda/xaelWiki.git
+[submodule "vendor/hermes-nicegui"]
+	path = vendor/hermes-nicegui
+	url = git@github.com:traverseda/hermes-nicegui.git
