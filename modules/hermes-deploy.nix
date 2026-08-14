@@ -172,9 +172,10 @@ in
       type = lib.types.str;
       default = ''
         # Ask the agent itself: the gateway unit must be active AND `hermes
-        # doctor` (the agent's own self-diagnostic) must pass.
+        # doctor` (the agent's own self-diagnostic) must pass. Derived from the
+        # agent's own options so it stays coherent if stateDir/user change.
         systemctl is-active --quiet hermes-agent \
-          && runuser -u hermes -- env HERMES_HOME=/var/lib/hermes/.hermes \
+          && runuser -u ${config.services.hermes-agent.user} -- env HERMES_HOME=${config.services.hermes-agent.stateDir}/.hermes \
                hermes doctor >/dev/null 2>&1
       '';
       description = "Bash command; exit 0 = healthy. Runs as root and should ask Hermes itself.";
@@ -239,20 +240,30 @@ in
       options = "--delete-older-than 30d";
     };
 
-    # Convenience CLI wrappers for the operator / the bot.
-    environment.systemPackages = [
-      (pkgs.writeShellScriptBin "hermes-deploy" ''
-        exec systemctl start hermes-deploy.service
-      '')
-      (pkgs.writeShellScriptBin "hermes-rollback" ''
-        exec systemctl start hermes-rollback.service
-      '')
-      (pkgs.writeShellScriptBin "hermes-status" ''
-        echo "== git =="; git -C ${cfg.repoDir} log --oneline -5
-        echo "== generations =="; nix-env -p /nix/var/nix/profiles/system --list-generations
-        echo "== last-known-good =="; cat ${cfg.stateDir}/last-known-good 2>/dev/null || echo none
-        echo "== service =="; systemctl status hermes-agent --no-pager
-      '')
-    ];
+    # git is a hard dependency of the deploy/rollback/watchdog scripts and of
+    # `hermes-status` — they all run git against the flake repo. It must be on
+    # the BOX (via system.path, which the units above inherit), not just in the
+    # agent's sandbox. openssh covers git-over-ssh remotes (deploy keys).
+    environment.systemPackages =
+      with pkgs;
+      [
+        git
+        openssh
+      ]
+      ++ [
+        # Convenience CLI wrappers for the operator / the bot.
+        (pkgs.writeShellScriptBin "hermes-deploy" ''
+          exec systemctl start hermes-deploy.service
+        '')
+        (pkgs.writeShellScriptBin "hermes-rollback" ''
+          exec systemctl start hermes-rollback.service
+        '')
+        (pkgs.writeShellScriptBin "hermes-status" ''
+          echo "== git =="; git -C ${cfg.repoDir} log --oneline -5
+          echo "== generations =="; nix-env -p /nix/var/nix/profiles/system --list-generations
+          echo "== last-known-good =="; cat ${cfg.stateDir}/last-known-good 2>/dev/null || echo none
+          echo "== service =="; systemctl status hermes-agent --no-pager
+        '')
+      ];
   };
 }

@@ -37,6 +37,7 @@ pkgs.testers.runNixOSTest {
 
     machine.wait_for_unit("hermes-agent")
     machine.wait_for_unit("multi-user.target")
+    machine.wait_for_unit("hermes-git-repo")
 
     # The three deploy units must exist and be correctly wired.
     machine.succeed("systemctl cat hermes-deploy.service | grep -q ExecStart")
@@ -44,11 +45,20 @@ pkgs.testers.runNixOSTest {
     machine.succeed("systemctl cat hermes-watchdog.service | grep -q ExecStart")
     machine.succeed("systemctl is-enabled hermes-watchdog.timer")
 
-    # The bot-facing CLI wrappers exist.
+    # The bot-facing CLI wrappers exist (and git is on the box — a missing git
+    # used to be masked here by `|| true`; hermes-status would hit `git:
+    # command not found` on line 1 and still pass because `grep generations`
+    # matched the later echo).
+    machine.succeed("command -v git")
     machine.succeed("hermes-status | grep -q generations")
 
-    # Triggering a manual rollback with no prior generation should not crash.
+    # Manual rollback against a real git repo: the git phase must run and
+    # rewind the flake checkout by one commit. The trailing `nixos-rebuild
+    # switch --rollback` step may legitimately fail (a fresh VM has only one
+    # generation), so assert the git phase worked and no binary is missing.
     machine.succeed("systemctl start hermes-rollback.service || true")
+    machine.succeed("git -C /var/lib/hermes-deploy log --oneline -1 | grep -q 'gen 1'")
+    machine.succeed("! journalctl -u hermes-rollback.service --no-pager | grep -q 'command not found'")
 
     print("integration test passed")
   '';

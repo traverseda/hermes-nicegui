@@ -48,6 +48,15 @@ let
   deployBin = findBin "hermes-deploy";
   rollbackBin = findBin "hermes-rollback";
 
+  # git/openssh must be on the box (not just in the agent's sandbox): the
+  # deploy/rollback/watchdog scripts and `hermes-status` all run git against
+  # the flake repo. A box without git cannot roll back. (Regression guard for
+  # the `git: command not found` failure the integration test used to mask.)
+  hasPackage =
+    prefix: lib.any (p: lib.hasPrefix prefix (p.name or "")) cfg.environment.systemPackages;
+  gitPresent = if hasPackage "git-" then "yes" else "no";
+  sshPresent = if hasPackage "openssh-" then "yes" else "no";
+
   need = needle: file: ''
     if ! grep -q -- ${lib.escapeShellArg needle} ${file}; then
       echo "MISSING: ${needle} in ${file}" >&2
@@ -66,6 +75,7 @@ pkgs.runCommand "hermes-config-check"
       agentUnit
       ;
     inherit statusBin deployBin rollbackBin;
+    inherit gitPresent sshPresent;
     tailscaleAuthKeyFile = cfg.services.tailscale.authKeyFile;
     agentEnabled = lib.boolToString cfg.services.hermes-agent.enable;
   }
@@ -115,6 +125,10 @@ pkgs.runCommand "hermes-config-check"
     ${need "generations" "status.bin"}
     ${need "systemctl start hermes-deploy.service" "deploy.bin"}
     ${need "systemctl start hermes-rollback.service" "rollback.bin"}
+
+    # ── git/openssh are on the box (deploy machinery is git-driven) ────
+    test "$gitPresent" = "yes" || { echo "MISSING: git not in systemPackages — deploy/rollback cannot run" >&2; exit 1; }
+    test "$sshPresent" = "yes" || { echo "MISSING: openssh not in systemPackages — ssh git remotes cannot fetch" >&2; exit 1; }
 
     # ── tailscale wiring (auth key is wired regardless of the VM-only
     #    `enable = false` override) ─────────────────────────────────────
