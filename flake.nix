@@ -25,7 +25,9 @@
     # and re-locks; the default below (upstream, no patches) is the safe
     # fallback. Rollback = git revert of the url + flake.lock, then redeploy.
     hermes-agent = {
-      url = "github:NousResearch/hermes-agent/fa83af3f9a42790730b8966ff67e7d9fb627899f";
+      # 802a60a fixes hermes-dashboard crash: adds "registration_lifecycle" to
+      # pyproject.toml [project] so the root module ships in the venv wheel.
+      url = "github:NousResearch/hermes-agent/802a60a1502da137c4084d0e383dcab95735ccf2";
       inputs.nixpkgs.follows = "nixpkgs";
     };
 
@@ -49,7 +51,30 @@
       lib = nixpkgs.lib;
       pkgs = nixpkgs.legacyPackages.${system};
 
+      # Package overrides applied to every config (host + test VM). Keep
+      # these minimal and commented — each is a real upstream bug we had to
+      # work around, not a preference.
+      packageOverlays = [
+        # inline-snapshot (a checkInput of fastapi, pulled in by the
+        # hermes-nicegui python env) ships 3 tests that break under the pinned
+        # pytest (docs/example assertions that churn between pytest releases).
+        # It is a test-only helper; skipping its self-check is safe.
+        # NOTE: must override the python312 interpreter's packageOverrides —
+        # overriding the top-level python312Packages attr does NOT reach
+        # `python312.withPackages`, which uses the interpreter's internal set.
+        (final: prev: {
+          python312 = prev.python312.override {
+            packageOverrides = _pyfinal: pyprev: {
+              inline-snapshot = pyprev.inline-snapshot.overridePythonAttrs (old: {
+                doCheck = false;
+              });
+            };
+          };
+        })
+      ];
+
       commonModules = [
+        { nixpkgs.overlays = packageOverlays; }
         hermes-agent.nixosModules.default
         agenix.nixosModules.age
         ./modules/hermes-service.nix

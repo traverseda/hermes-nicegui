@@ -129,6 +129,15 @@
     group = "hermes";
     mode = "0440";
   };
+  # Bearer token the nicegui sessions/cron plugins send to the gateway
+  # api_server (:8443). MUST equal the gateway's API_SERVER_KEY
+  # (api-server-env). Without it every gateway call 401s.
+  age.secrets."hermes-nicegui-gateway-token" = {
+    file = ../../secrets/hermes-nicegui-gateway-token.age;
+    owner = "hermes";
+    group = "hermes";
+    mode = "0440";
+  };
 
   services.hermes-agent.environmentFiles = [
     config.age.secrets."hermes-env".path
@@ -194,6 +203,8 @@
   services.hermes-nicegui = {
     enable = true;
     environmentFile = config.age.secrets."hermes-nicegui-env".path;
+    gatewayTokenFile = config.age.secrets."hermes-nicegui-gateway-token".path;
+    darkMode = true;
   };
 
   # ── Nix ──────────────────────────────────────────────────────────────
@@ -220,10 +231,39 @@
       PasswordAuthentication = false;
     };
   };
-  # Populate with the operator's pubkeys:  ssh-keyscan / add manually.
+  # Operator access — without these, a fresh activation locks root out
+  # (PermitRootLogin=prohibit-password + empty keys). Keep at least one
+  # operator key here at all times.
   users.users.root.openssh.authorizedKeys.keys = [
-    # "ssh-ed25519 AAAA... operator@machine"
+    "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAINqMoutqmTZsU+nMN5mdsJz+OnzvLtgDYFR/kOYW2YWU traverseda@azrael"
   ];
+  # Pin root's shell to a literal store path instead of the default
+  # /run/current-system/sw/bin/bash. The default only exists after a full NixOS
+  # boot; during an in-place conversion (nixos-install --root /) the users
+  # activation snippet writes it into /etc/passwd while still running Debian,
+  # and since /run is a tmpfs that gets remounted, the path can vanish and lock
+  # root out of both console and SSH. A literal store path (bash's own bin/bash)
+  # exists as soon as the closure is present, and survives NixOS boots too.
+  # NOTE: must be a plain string path, NOT a shell package — users-groups.nix
+  # normalises any shell package back to /run/current-system/sw via toShellPath.
+  users.users.root.shell = "${pkgs.bash}/bin/bash";
+
+  # ── Networking ───────────────────────────────────────────────────────
+  # Proxmox only wires the veth; the container configures eth0 itself
+  # (unprivileged LXC: no host-side IP injection). The proxmox-lxc module
+  # sets manageNetwork=false (networkd on, DHCP off), so without an explicit
+  # eth0 networkd unit the container comes up with NO network → locked out.
+  # This is a real-LXC bug the VM never caught.
+  systemd.network.networks."10-eth0" = {
+    matchConfig.Name = "eth0";
+    networkConfig = {
+      DHCP = "yes";
+      LinkLocalAddressing = "no";
+    };
+    dhcpV4Config = {
+      RouteMetric = 100;
+    };
+  };
 
   # ── Firewall ─────────────────────────────────────────────────────────
   # Tailscale traffic rides on the tailnet; nothing else needs exposing.
@@ -237,13 +277,13 @@
   system.stateVersion = "26.05";
 
   system.activationScripts.hermes-repo-init = lib.stringAfter [ "users" ] ''
-    # The deploy machinery expects a git checkout of this flake here.
+    # The deploy machinery expects a copy of this flake here (no git remote —
+    # scripts/deploy.sh rsyncs it in on every deploy).
     mkdir -p /var/lib/hermes-deploy
     chmod 0755 /var/lib/hermes-deploy
     if [ ! -d /var/lib/hermes-deploy/.git ]; then
       echo "hermes: /var/lib/hermes-deploy is not a git repo."
-      echo "hermes: clone it after first boot:"
-      echo "  git clone <this-repo> /var/lib/hermes-deploy"
+      echo "hermes: run scripts/deploy.sh from the build machine (it rsyncs the repo)."
     fi
   '';
 }
