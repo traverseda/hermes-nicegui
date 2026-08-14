@@ -73,6 +73,18 @@ in
         platform_toolsets.api_server = [ "hermes-api-server" "kanban" ];
       };
 
+      # AgentMail MCP server — gives the agent its own inbox (send/receive
+      # email). The API key is NOT declared here: it lives in the hermes-env
+      # agenix secret (.env) and is referenced as `${env:AGENTMAIL_API_KEY}`,
+      # which hermes resolves from the loaded .env at runtime (mcp_tool.py
+      # `_env_ref_name`). Putting the literal key here would leak it into
+      # config.yaml → the world-readable nix store.
+      mcpServers.agentmail = {
+        command = "npx";
+        args = [ "-y" "agentmail-mcp" ];
+        env.AGENTMAIL_API_KEY = "\${env:AGENTMAIL_API_KEY}";
+      };
+
       # Workspace policy: always-on "file a ticket instead" rules for the
       # default profile's own sessions (workers get separate kanban guidance
       # injected by the dispatcher + the `ticketing` skill on their task).
@@ -88,6 +100,9 @@ in
         jq
         ripgrep
         tailscale
+        # nodejs provides `npx`, required by the agentmail MCP server
+        # (npx -y agentmail-mcp). Keep in sync with mcpServers.agentmail.
+        nodejs
       ];
     };
 
