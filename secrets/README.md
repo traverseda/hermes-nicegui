@@ -106,8 +106,11 @@ before first boot (an empty file is committed so the flake builds).
 
 `cloudflare-tunnel.age` holds the Cloudflare Tunnel **connector token** for the
 remotely-managed tunnel (`services.cloudflare-tunnel`). The tunnel + public
-hostnames are configured in the Cloudflare dashboard; this file is just the
-`cfut_…` token the LXC uses to dial out (`cloudflared tunnel run --token`).
+hostnames are configured in Cloudflare (dashboard or API — the `hermes` tunnel
+serves `hermes.0u0.ca` → `http://localhost:8080`); this file is just the token
+the LXC uses to dial out (`cloudflared tunnel run --token`). It may be the
+`eyJ…` JWT from `cloudflared tunnel token <name>`/the API or the `cfut_…`
+prefixed form — both are accepted.
 
 To (re)generate the token: Cloudflare Zero Trust → Networks → Tunnels → your
 tunnel → configure, or `cloudflared tunnel token <name>` (needs a `cert.pem`
@@ -115,13 +118,13 @@ from `cloudflared tunnel login`). Then re-encrypt it into the secret:
 
 ```sh
 nix develop
-printf '%s\n' '<cfut_...token...>' | \
+printf '%s\n' '<connector-token>' | \
   age -e -r "$(cat ~/.ssh/id_ed25519.pub)" -r "$(cat secrets/lxc-host-ed25519.pub)" \
   -o secrets/cloudflare-tunnel.age
 ```
 
 No `tunnelId` is needed — the tunnel's identity and public hostnames live in
-the dashboard, not in Nix config.
+Cloudflare, not in Nix config.
 
 `xaelwiki-env` is a plain `KEY=value` file gating the xaelwiki notes MCP server:
 

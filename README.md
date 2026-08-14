@@ -306,10 +306,11 @@ it reaches Hermes by running the `hermes` CLI as a subprocess and sharing
 cron/chat all see the real agent state.
 
 - **Public via the Cloudflare tunnel.** The unit binds `127.0.0.1:8080`
-  (loopback — no tailnet port, the exposure registry is untouched). Add a
-  public hostname in the Cloudflare dashboard pointing at
-  `http://localhost:8080`; publishing it is a dashboard action, not a flake
-  edit (see the Cloudflare Tunnel section).
+  (loopback — no tailnet port, the exposure registry is untouched). The
+  dedicated remotely-managed `hermes` tunnel (`cloudflared tunnel run --token`,
+  same module below) serves **`https://hermes.0u0.ca` → `http://localhost:8080`**
+  — hostname, ingress, and DNS are configured in Cloudflare (tunnel + CNAME
+  already created), so no dashboard step remains.
 - **Auth is the app's own login.** `HERMES_AUTH_ENABLED` gates the whole app
   behind a username/password admin account (created on first visit). That
   single login is the only thing between the public tunnel and a file browser
@@ -367,17 +368,22 @@ registry above is untouched. `services.cloudflare-tunnel` (in
 `modules/cloudflare-tunnel.nix`) runs a **remotely-managed** tunnel:
 
 - **Dashboard-managed tunnel.** The tunnel and its public hostnames are
-  created in the Cloudflare dashboard (Zero Trust → Networks → Tunnels). The
+  created in Cloudflare (Zero Trust → Networks → Tunnels, or the API). The
   LXC only runs `cloudflared tunnel run --token` with the tunnel's connector
-  token (`cfut_…`), which comes from the `cloudflare-tunnel` agenix secret —
-  never Nix config. systemd `LoadCredential` hands it to the unit as
+  token, which comes from the `cloudflare-tunnel` agenix secret — never Nix
+  config. systemd `LoadCredential` hands it to the unit as
   `$CREDENTIALS_DIRECTORY/token` (0600, DynamicUser), so the literal token
   never reaches `/nix/store`.
-- **Publishing a hostname is a dashboard action, not a flake edit.** Add the
-  tunnel's public hostnames in the Cloudflare dashboard, pointing each at the
-  local service (e.g. `dashboard.0u0.ca` → `http://localhost:9119`). The
+- **The `hermes` tunnel serves `hermes.0u0.ca`.** A dedicated remotely-managed
+  `hermes` tunnel (id `93799893-ed0d-4c10-8122-83adf32f3134`) routes
+  `https://hermes.0u0.ca` → `http://localhost:8080` (the hermes-nicegui UI).
+  Tunnel, ingress, and the `hermes` CNAME are all configured in Cloudflare
+  already; the LXC just connects with the token in the secret.
+- **Publishing a hostname is a Cloudflare action, not a flake edit.** Add the
+  tunnel's public hostnames in Cloudflare (dashboard or API), pointing each at
+  the local service (e.g. `dashboard.0u0.ca` → `http://localhost:9119`). The
   service's own auth still gates the endpoint (dashboard basic-auth, hindsight
-  bearer, HA `API_SERVER_KEY`).
+  bearer, HA `API_SERVER_KEY`, hermes-nicegui's own login).
 - **Guardrail trade-off.** Because ingress lives in the dashboard, the
   exposure-registry credential enforcement does NOT apply to the public path
   — Cloudflare routes whatever hostnames the dashboard says. This is the
