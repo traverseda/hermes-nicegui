@@ -280,32 +280,28 @@ plane `:9999` (off unless enabled; bearer key), Home Assistant proxy `:8444`
 Public exposure is opt-in and outbound-only: `cloudflared` on the LXC dials
 out to Cloudflare, so **no inbound port is opened** and the tailnet-exposure
 registry above is untouched. `services.cloudflare-tunnel` (in
-`modules/cloudflare-tunnel.nix`) wires the pinned nixpkgs
-`services.cloudflared` module:
+`modules/cloudflare-tunnel.nix`) runs a **remotely-managed** tunnel:
 
-- **Locally-managed tunnel.** The tunnel credentials (a JSON file with
-  `AccountTag`/`TunnelID`/`TunnelSecret`) come from the `cloudflare-tunnel`
-  agenix secret — never Nix config. Set the real `tunnelId` to match the
-  credentials file (see `secrets/README.md`).
-- **Ingress is credential-enforced — same mechanism as the tailnet.** Each
-  ingress value must be a `name` from `hermesDeploy.exposure.services`, and
-  the public URL is derived from that exposure's port. The build fails if an
-  ingress references an unknown exposure, an uncredentialed one, or an
-  `auth.type = "none"` service (the insecure opt-in is tailnet-only, never
-  allowed on the public internet).
-- **Nothing is public until you add an ingress rule.** The module starts with
-  an empty `ingress` table and a `http_status:404` catch-all, so "wired but
-  not exposed" genuinely exposes nothing. Going public is one deliberate edit:
-  ```nix
-  services.cloudflare-tunnel.ingress = {
-    "dashboard.0u0.ca" = "hermes-dashboard";   # name from the exposure registry
-  };
-  ```
-  The module warns when ingress is non-empty.
-- **Front it with credentials.** Hostnames published through the tunnel still
-  hit the service's own auth (dashboard basic-auth, hindsight bearer, HA
-  `API_SERVER_KEY`). The public hostnames on `0u0.ca` / `outsidecontext.solutions`
-  live in the tunnel ingress table and/or Cloudflare's dashboard.
+- **Dashboard-managed tunnel.** The tunnel and its public hostnames are
+  created in the Cloudflare dashboard (Zero Trust → Networks → Tunnels). The
+  LXC only runs `cloudflared tunnel run --token` with the tunnel's connector
+  token (`cfut_…`), which comes from the `cloudflare-tunnel` agenix secret —
+  never Nix config. systemd `LoadCredential` hands it to the unit as
+  `$CREDENTIALS_DIRECTORY/token` (0600, DynamicUser), so the literal token
+  never reaches `/nix/store`.
+- **Publishing a hostname is a dashboard action, not a flake edit.** Add the
+  tunnel's public hostnames in the Cloudflare dashboard, pointing each at the
+  local service (e.g. `dashboard.0u0.ca` → `http://localhost:9119`). The
+  service's own auth still gates the endpoint (dashboard basic-auth, hindsight
+  bearer, HA `API_SERVER_KEY`).
+- **Guardrail trade-off.** Because ingress lives in the dashboard, the
+  exposure-registry credential enforcement does NOT apply to the public path
+  — Cloudflare routes whatever hostnames the dashboard says. This is the
+  deliberate trade-off of remotely-managed mode (the old locally-managed
+  module is in git history).
+- **Rotate the token:** rotate it in the Cloudflare dashboard, re-encrypt the
+  new `cfut_…` into `secrets/cloudflare-tunnel.age` (see `secrets/README.md`),
+  and redeploy.
 
 ## xaelwiki notes MCP server (editable, low-stakes)
 

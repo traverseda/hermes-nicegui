@@ -1,40 +1,36 @@
-# Cloudflare Tunnel (locally-managed, outbound-only).
+# Cloudflare Tunnel (remotely-managed, outbound-only).
 #
-# Exposes selected local services to the public internet through
-# Cloudflare's edge WITHOUT opening any inbound port on the LXC: `cloudflared`
-# dials out to Cloudflare (HTTPS 443 / QUIC 7844) and Cloudflare routes the
-# hostnames you configure in the ingress table back down the same connection.
+# Runs `cloudflared tunnel run --token` against a DASHBOARD-MANAGED tunnel:
+# the tunnel and its public hostnames are created/configured in the Cloudflare
+# dashboard (Zero Trust → Networks → Tunnels), and cloudflared on the LXC just
+# dials out to Cloudflare with the tunnel's connector token. No inbound port is
+# opened on the LXC.
 #
 # Security model:
-#   * The tunnel itself is a local-management tunnel, wired through the pinned
-#     nixpkgs `services.cloudflared` module. The tunnel credentials (a JSON
-#     file with AccountTag / TunnelID / TunnelSecret — NOT the `eyJ…` token
-#     used by remotely-managed tunnels) come from an agenix secret, never Nix
-#     config.
-#   * Ingress is EMPTY by default and `default = http_status:404` — nothing is
-#     routable to the public internet until a hostname is explicitly added.
-#     Adding an ingress line is the (intentional) act of going public, so it
-#     is deliberately the only step that exposes a service.
-#   * INGRESS TARGETS ARE CREDENTIAL-ENFORCED. Each ingress value is a `name`
-#     from the tailnet-exposure registry (`hermesDeploy.exposure.services` in
-#     modules/exposure.nix), and the local URL is DERIVED from that exposure's
-#     port. The same credentials that had to be wired for the tailnet path are
-#     therefore required for the public path too. The build fails if an
-#     ingress references an unknown exposure, an uncredentialed one
-#     (`credentialsConfigured = false`), or one whose `auth.type = "none"` —
-#     the insecure opt-in is scoped to the trusted tailnet and never allowed
-#     on the public internet.
-#   * cloudflared runs as a dynamic system user; systemd loads the credential
-#     into a root-owned, 0400 runtime directory, so the agenix file only needs
-#     to be root-readable.
+#   * The connector token (cfut_…) comes from an agenix secret
+#     (`cloudflare-tunnel`), never from Nix config, and is handed to the unit
+#     via systemd LoadCredential — systemd mounts it into
+#     $CREDENTIALS_DIRECTORY/token with 0600 perms for the DynamicUser, so the
+#     literal token never reaches /nix/store or the flake repo.
+#   * Outbound-only: cloudflared only establishes outbound connections; no
+#     firewall rule is required or opened, and the tailnet-exposure registry
+#     (modules/exposure.nix) is untouched.
+#   * INGRESS LIVES IN THE DASHBOARD. Unlike a locally-managed tunnel there is
+#     no local ingress table here, so the exposure-registry credential
+#     guardrails do NOT apply to the public path — the hostnames Cloudflare
+#     routes to this LXC are whatever the dashboard says. Publishing a hostname
+#     is a dashboard action, not a flake edit. (This is the deliberate trade-off
+#     of remotely-managed mode; the old locally-managed module is in git
+#     history.)
+#   * The unit is hardened: DynamicUser, NoNewPrivileges, ProtectSystem=strict,
+#     PrivateTmp.
 #
-# Outbound-only: no firewall rule is required or opened. `services.cloudflared`
-# only establishes outbound connections.
-#
-# Requires the exposure registry module (modules/exposure.nix) to be present.
+# The connector token is rotated by the operator in the Cloudflare dashboard;
+# re-encrypt the new value into secrets/cloudflare-tunnel.age and redeploy.
 
 {
   config,
+  pkgs,
   lib,
   ...
 }:
@@ -42,123 +38,61 @@
 let
   cfg = config.services.cloudflare-tunnel;
 
-  # The registry is the single source of truth for "which services exist and
-  # what they are authenticated with". Build a name → exposure lookup so an
-  # ingress rule can only ever target a registered, credentialed service.
-  exposures = config.hermesDeploy.exposure.services;
-  byName = lib.listToAttrs (map (e: lib.nameValuePair e.name e) exposures);
-
-  ingressTargets = lib.attrValues cfg.ingress;
-  unknownTargets = lib.filter (n: !(builtins.hasAttr n byName)) ingressTargets;
-  uncredentialedTargets = lib.filter (
-    n: builtins.hasAttr n byName && !byName.${n}.auth.credentialsConfigured
-  ) ingressTargets;
-  insecureTargets = lib.filter (
-    n: builtins.hasAttr n byName && byName.${n}.auth.type == "none"
-  ) ingressTargets;
-
-  # Derive each public URL from the registered exposure's port. Unknown names
-  # fall back to 404 so the eval stays clean and the assertion below (not an
-  # opaque "attribute missing" error) is what surfaces.
-  derivedIngress = lib.mapAttrs (
-    host: name:
-    if builtins.hasAttr name byName then
-      "http://127.0.0.1:${toString byName.${name}.port}"
-    else
-      "http_status:404"
-  ) cfg.ingress;
+  runScript = pkgs.writeShellScript "cloudflared-tunnel-run" ''
+    set -euo pipefail
+    # systemd LoadCredential mounts the agenix token here (0600, root-owned
+    # runtime dir); the shell strips the trailing newline.
+    exec ${cfg.package}/bin/cloudflared tunnel --no-autoupdate run \
+      --token "$(cat "$CREDENTIALS_DIRECTORY/token")"
+  '';
 in
 {
   options.services.cloudflare-tunnel = {
-    enable = lib.mkEnableOption "Cloudflare Tunnel (locally-managed, outbound-only)";
+    enable = lib.mkEnableOption "Cloudflare Tunnel (remotely-managed, outbound-only)";
 
-    tunnelId = lib.mkOption {
-      type = lib.types.str;
-      default = "00000000-0000-0000-0000-000000000000";
-      description = ''
-        UUID of the locally-managed tunnel. Must match the TunnelID inside the
-        credentials file. Get it from the Cloudflare dashboard (Networking →
-        Tunnels → your tunnel) or `cloudflared tunnel list`.
-      '';
-    };
-
-    credentialsFile = lib.mkOption {
+    tokenFile = lib.mkOption {
       type = lib.types.nullOr lib.types.path;
       default = null;
       description = ''
-        Agenix-decrypted tunnel credentials JSON file:
-          { "AccountTag": "…", "TunnelID": "…", "TunnelSecret": "…" }
-        Generated by `cloudflared tunnel login` / `cloudflared tunnel create
-        <name>`. This is NOT the `eyJ…` token used by remotely-managed
-        tunnels.
+        Agenix-decrypted file containing the tunnel connector token
+        (`cfut_…`, from `cloudflared tunnel token <name>` or the dashboard).
+        systemd LoadCredential exposes it to the unit as
+        $CREDENTIALS_DIRECTORY/token — never in Nix config or the store.
       '';
     };
 
-    ingress = lib.mkOption {
-      type = lib.types.attrsOf lib.types.str;
-      default = { };
-      description = ''
-        Public hostname → exposure name, where the name must match a `name`
-        declared in `hermesDeploy.exposure.services` (modules/exposure.nix).
-        The local URL is derived from that exposure's port, and the exposure's
-        credentials must be wired — otherwise the build fails. EMPTY by
-        default; add entries only to deliberately publish a service, e.g.
-          { "dashboard.0u0.ca" = "hermes-dashboard"; }
-      '';
-      example = {
-        "dashboard.0u0.ca" = "hermes-dashboard";
-      };
+    package = lib.mkOption {
+      type = lib.types.package;
+      default = pkgs.cloudflared;
+      description = "cloudflared package to run the tunnel with.";
     };
   };
 
   config = lib.mkIf cfg.enable {
-    services.cloudflared.enable = true;
+    systemd.services.cloudflared-tunnel = {
+      description = "Cloudflare Tunnel (remotely-managed, outbound-only)";
+      after = [ "network-online.target" ];
+      wants = [ "network-online.target" ];
+      wantedBy = [ "multi-user.target" ];
 
-    services.cloudflared.tunnels.${cfg.tunnelId} = {
-      credentialsFile = cfg.credentialsFile;
-      ingress = derivedIngress;
-      # Catch-all: refuse anything that doesn't match an ingress rule. This is
-      # what keeps "wired but not yet exposed" truly not-exposed.
-      default = "http_status:404";
+      path = [ cfg.package ];
+
+      serviceConfig = {
+        LoadCredential = lib.optional (cfg.tokenFile != null) "token:${cfg.tokenFile}";
+        ExecStart = runScript;
+        DynamicUser = true;
+        Restart = "on-failure";
+        RestartSec = 5;
+        UMask = "0007";
+        NoNewPrivileges = true;
+        ProtectSystem = "strict";
+        ProtectHome = true;
+        PrivateTmp = true;
+      };
     };
 
-    assertions = [
-      {
-        assertion = unknownTargets == [ ];
-        message = ''
-          services.cloudflare-tunnel: ingress references exposure(s) not
-          declared in hermesDeploy.exposure.services: ${toString unknownTargets}.
-          Add each to the exposure registry (with credentials) before exposing
-          it through the tunnel.
-        '';
-      }
-      {
-        assertion = uncredentialedTargets == [ ];
-        message = ''
-          services.cloudflare-tunnel: ingress would expose service(s) whose
-          credentials are not configured: ${toString uncredentialedTargets}.
-          Wire the exposure's credential source (agenix secret / env file) so
-          credentialsConfigured = true before publishing it.
-        '';
-      }
-      {
-        assertion = insecureTargets == [ ];
-        message = ''
-          services.cloudflare-tunnel: ingress would expose unauthenticated
-          service(s) (auth.type = "none") to the PUBLIC internet:
-          ${toString insecureTargets}.
-          The insecure opt-in is tailnet-only; public exposure requires real
-          credentials (basic / bearer / oauth).
-        '';
-      }
+    warnings = lib.optionals (cfg.tokenFile == null) [
+      "services.cloudflare-tunnel: no tokenFile set — the tunnel cannot connect until the connector token (cfut_…) is supplied via the agenix secret."
     ];
-
-    warnings =
-      lib.optionals (cfg.credentialsFile == null) [
-        "services.cloudflare-tunnel: no credentialsFile set — the tunnel cannot connect until the credentials JSON (AccountTag/TunnelID/TunnelSecret) is supplied via the agenix secret."
-      ]
-      ++ lib.optionals (cfg.ingress != { }) [
-        "services.cloudflare-tunnel: ingress rules are configured — the hostname(s) ${builtins.concatStringsSep ", " (builtins.attrNames cfg.ingress)} will be reachable from the PUBLIC INTERNET through Cloudflare."
-      ];
   };
 }

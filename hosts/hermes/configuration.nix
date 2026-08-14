@@ -145,13 +145,15 @@
 
   # ── Cloudflare Tunnel ───────────────────────────────────────────────
   # Public exposure for selected services, outbound-only (cloudflared dials
-  # out to Cloudflare; no inbound port is opened). Locally-managed tunnel:
-  # the credentials JSON comes from the agenix secret. Ingress is empty so
-  # NOTHING is publicly routable yet — add hostname → service entries here
-  # (and set the real tunnelId) to deliberately go public.
+  # out to Cloudflare; no inbound port is opened). REMOTELY-managed tunnel:
+  # the tunnel + public hostnames are configured in the Cloudflare dashboard,
+  # and the LXC runs `cloudflared tunnel run --token` with the connector token
+  # (cfut_…) from the agenix secret. Publishing a hostname is a dashboard
+  # action, NOT a flake edit — nothing is publicly routable until you add
+  # hostnames for this tunnel in the dashboard.
   services.cloudflare-tunnel = {
     enable = true;
-    credentialsFile = config.age.secrets."cloudflare-tunnel".path;
+    tokenFile = config.age.secrets."cloudflare-tunnel".path;
   };
 
   # ── xaelwiki notes MCP server ────────────────────────────────────────

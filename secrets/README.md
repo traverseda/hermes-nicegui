@@ -33,7 +33,7 @@ during initial creation** (see below) — otherwise agenix can't decrypt.
 | `hindsight-env.age`      | `/run/agenix/hindsight-env` | Hindsight container env file   |
 | `api-server-env.age`     | `/run/agenix/api-server-env` | default profile `.env` (API_SERVER_KEY for the multiplexed api_server) |
 | `dashboard-env.age`      | `/run/agenix/dashboard-env` | default profile `.env` (dashboard basic-auth credentials) |
-| `cloudflare-tunnel.age`  | `/run/agenix/cloudflare-tunnel` | Cloudflare Tunnel credentials (`services.cloudflare-tunnel`) |
+| `cloudflare-tunnel.age`  | `/run/agenix/cloudflare-tunnel` | Cloudflare Tunnel connector token (`services.cloudflare-tunnel`) |
 | `xaelwiki-env.age`       | `/run/agenix/xaelwiki-env` | xaelwiki MCP bearer token (`XAEL_AUTH_TOKEN`) |
 | `xaelwiki-ssh.age`       | `/run/agenix/xaelwiki-ssh` | SSH deploy key for the notes vault (`services.xaelwiki`) |
 
@@ -103,30 +103,24 @@ The LLM *endpoint* and *model* are not secrets — they live in Nix as
 the Tailscale admin console and is left to the operator to fill in by hand
 before first boot (an empty file is committed so the flake builds).
 
-`cloudflare-tunnel.age` holds the Cloudflare Tunnel credentials for the
-locally-managed tunnel (`services.cloudflare-tunnel`). The committed copy is
-the Cloudflare tunnel token the operator provided; for the tunnel to connect,
-this file must instead contain the tunnel **credentials JSON**:
+`cloudflare-tunnel.age` holds the Cloudflare Tunnel **connector token** for the
+remotely-managed tunnel (`services.cloudflare-tunnel`). The tunnel + public
+hostnames are configured in the Cloudflare dashboard; this file is just the
+`cfut_…` token the LXC uses to dial out (`cloudflared tunnel run --token`).
 
-```json
-{ "AccountTag": "…", "TunnelID": "…", "TunnelSecret": "…" }
-```
-
-Generate it with `cloudflared tunnel login` / `cloudflared tunnel create <name>`
-(`~/.cloudflared/<tunnel-id>.json`), then:
+To (re)generate the token: Cloudflare Zero Trust → Networks → Tunnels → your
+tunnel → configure, or `cloudflared tunnel token <name>` (needs a `cert.pem`
+from `cloudflared tunnel login`). Then re-encrypt it into the secret:
 
 ```sh
 nix develop
-cp ~/.cloudflared/<tunnel-id>.json /tmp/cf-creds.json
-age -e -r "$(cat ~/.ssh/id_ed25519.pub)" -r "$(cat secrets/lxc-host-ed25519.pub)" \
-  -o secrets/cloudflare-tunnel.age /tmp/cf-creds.json
-rm /tmp/cf-creds.json
+printf '%s\n' '<cfut_...token...>' | \
+  age -e -r "$(cat ~/.ssh/id_ed25519.pub)" -r "$(cat secrets/lxc-host-ed25519.pub)" \
+  -o secrets/cloudflare-tunnel.age
 ```
 
-Keep the value in sync with `services.cloudflare-tunnel.tunnelId` in
-`hosts/hermes/configuration.nix`. Note: this is NOT the `eyJ…` token used by
-remotely-managed tunnels (that format is for `cloudflared tunnel run --token`,
-which the nixpkgs `services.cloudflared` module does not support).
+No `tunnelId` is needed — the tunnel's identity and public hostnames live in
+the dashboard, not in Nix config.
 
 `xaelwiki-env` is a plain `KEY=value` file gating the xaelwiki notes MCP server:
 

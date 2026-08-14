@@ -1,19 +1,14 @@
-# Fast, build-light verification of the Cloudflare Tunnel wiring + its
-# credential enforcement.
+# Fast, build-light verification of the Cloudflare Tunnel (remotely-managed)
+# wiring.
 #
-# The tunnel's ingress rules must reference exposures registered in
-# hermesDeploy.exposure.services, and only credentialed ones may be exposed
-# publicly. This check evals the module (with the exposure registry) and
-# asserts:
+# The tunnel is dashboard-managed and the LXC just runs
+# `cloudflared tunnel run --token`. This check evals the module and asserts:
 #
-#   * a valid credentialed exposure referenced by name derives the right
-#     local URL and produces no failing assertions,
-#   * an unknown exposure name in ingress trips an assertion,
-#   * an uncredentialed (credentialsConfigured = false) exposure in ingress
-#     trips an assertion,
-#   * an unauthenticated (auth.type = "none") exposure in ingress trips an
-#     assertion,
-#   * empty ingress + http_status:404 default keeps nothing public.
+#   * the unit runs cloudflared with --token,
+#   * the token comes from the agenix secret via systemd LoadCredential into
+#     $CREDENTIALS_DIRECTORY (never the literal token in the unit or store),
+#   * the unit is hardened (DynamicUser, NoNewPrivileges, ProtectSystem),
+#   * a wired token produces no warnings; a missing token warns.
 #
 # Run with:  nix build .#checks.x86_64-linux.cloudflare-tunnel-config-check
 
@@ -23,96 +18,33 @@ let
   inherit (nixpkgs) lib;
   pkgs = nixpkgs.legacyPackages.${system};
 
-  tunnelId = "11111111-2222-3333-4444-555555555555";
-
-  # Stub options the two modules touch, so we can eval them standalone
-  # without booting the whole NixOS system.
-  stubOptions = {
-    options.networking.firewall.interfaces.tailscale0.allowedTCPPorts = lib.mkOption {
-      type = lib.types.listOf lib.types.int;
-      default = [ ];
-    };
-    options.assertions = lib.mkOption {
-      type = lib.types.listOf (
-        lib.types.submodule {
-          options = {
-            assertion = lib.mkOption { type = lib.types.bool; };
-            message = lib.mkOption { type = lib.types.str; };
-          };
-        }
-      );
-      default = [ ];
-    };
-    options.warnings = lib.mkOption {
-      type = lib.types.listOf lib.types.str;
-      default = [ ];
-    };
-    options.services.cloudflared.enable = lib.mkOption {
-      type = lib.types.bool;
-      default = false;
-    };
-    options.services.cloudflared.tunnels = lib.mkOption {
-      type = lib.types.attrsOf lib.types.attrs;
-      default = { };
-    };
-  };
-
-  # The registry entries a real deployment would register.
-  credExposure = {
-    name = "hermes-dashboard";
-    port = 9119;
-    auth = {
-      type = "basic";
-      credentialsConfigured = true;
-    };
-  };
-  uncredExposure = credExposure // {
-    name = "uncredentialed";
-    auth = {
-      type = "basic";
-      credentialsConfigured = false;
-    };
-  };
-  insecureExposure = {
-    name = "noauth";
-    port = 9001;
-    auth = {
-      type = "none";
-    };
-  };
-
   mkCfg =
-    registry: ingress:
-    (lib.evalModules {
+    tokenFile:
+    (lib.nixosSystem {
+      inherit system;
       modules = [
-        ../modules/exposure.nix
         ../modules/cloudflare-tunnel.nix
-        stubOptions
         {
-          hermesDeploy.exposure.services = registry;
           services.cloudflare-tunnel = {
             enable = true;
-            inherit tunnelId;
-            credentialsFile = "/dummy/credentials.json";
-            inherit ingress;
+            inherit tokenFile;
           };
         }
       ];
     }).config;
 
-  # The generated cloudflared config JSON for a given config.
-  configJson = cfg: builtins.toJSON cfg.services.cloudflared.tunnels.${tunnelId};
+  ok = mkCfg "/dummy/token";
+  missing = mkCfg null;
 
-  tunnelAssertionMsgs =
-    cfg:
-    builtins.concatStringsSep "\n---\n" (
-      map (a: a.message) (lib.filter (a: !a.assertion) cfg.assertions)
-    );
+  # The ExecStart is the wrapper script store path; read its text.
+  execScript = builtins.readFile ok.systemd.services."cloudflared-tunnel".serviceConfig.ExecStart;
 
-  ok = mkCfg [ credExposure ] { "dashboard.0u0.ca" = "hermes-dashboard"; };
-  unknown = mkCfg [ credExposure ] { "x.0u0.ca" = "does-not-exist"; };
-  uncred = mkCfg [ uncredExposure ] { "x.0u0.ca" = "uncredentialed"; };
-  insecure = mkCfg [ insecureExposure ] { "x.0u0.ca" = "noauth"; };
+  unitFile =
+    pkgs.writeText "cloudflared-tunnel.unit"
+      ok.systemd.units."cloudflared-tunnel.service".text;
+  execFile = pkgs.writeText "cloudflared-tunnel.exec" execScript;
+  okWarnings = builtins.concatStringsSep "|" ok.warnings;
+  missingWarnings = builtins.concatStringsSep "|" missing.warnings;
 
   need = needle: file: ''
     if ! grep -q -- ${lib.escapeShellArg needle} ${file}; then
@@ -123,39 +55,39 @@ let
 in
 pkgs.runCommand "cloudflare-tunnel-config-check"
   {
-    okConfig = pkgs.writeText "ok-config.json" (configJson ok);
-    okMsgs = tunnelAssertionMsgs ok;
-    unknownMsgs = tunnelAssertionMsgs unknown;
-    uncredMsgs = tunnelAssertionMsgs uncred;
-    insecureMsgs = tunnelAssertionMsgs insecure;
+    inherit
+      unitFile
+      execFile
+      okWarnings
+      missingWarnings
+      ;
   }
   ''
-    # ── valid credentialed exposure referenced by name ─────────────────
-    cat $okConfig > ok.config
-    ${need "http://127.0.0.1:9119" "ok.config"}      # URL derived from registry port
-    ${need "dashboard.0u0.ca" "ok.config"}
-    test -z "$okMsgs" || { echo "UNEXPECTED: valid config failed: $okMsgs" >&2; exit 1; }
+    cat $unitFile > unit
+    cat $execFile > exec
 
-    # ── empty ingress → nothing public (404 catch-all) ─────────────────
-    ${need "http_status:404" "ok.config"}
+    # ── runs cloudflared tunnel run --token ────────────────────────────
+    ${need "cloudflared tunnel" "exec"}
+    ${need "--token" "exec"}
+    ${need "CREDENTIALS_DIRECTORY/token" "exec"}
 
-    # ── unknown exposure name → build fails ────────────────────────────
-    echo "$unknownMsgs" | grep -qi "references exposure(s)" \
-      || { echo "MISSING: unknown-exposure assertion" >&2; exit 1; }
-    echo "$unknownMsgs" | grep -qi "does-not-exist" \
-      || { echo "MISSING: unknown-exposure assertion names the target" >&2; exit 1; }
+    # ── token from the agenix secret via LoadCredential, never inline ──
+    ${need "LoadCredential=token:/dummy/token" "unit"}
+    if grep -q "cfut_" unit exec; then
+      echo "UNEXPECTED: literal token leaked into unit/wrapper" >&2
+      exit 1
+    fi
 
-    # ── uncredentialed exposure → build fails ──────────────────────────
-    echo "$uncredMsgs" | grep -qi "credentialsConfigured" \
-      || { echo "MISSING: uncredentialed assertion" >&2; exit 1; }
-    echo "$uncredMsgs" | grep -qi "uncredentialed" \
-      || { echo "MISSING: uncredentialed assertion names the target" >&2; exit 1; }
+    # ── hardened unit ──────────────────────────────────────────────────
+    ${need "DynamicUser=true" "unit"}
+    ${need "NoNewPrivileges" "unit"}
+    ${need "ProtectSystem=strict" "unit"}
+    ${need "WantedBy=multi-user.target" "unit"}
 
-    # ── auth.type = "none" on the public internet → build fails ────────
-    echo "$insecureMsgs" | grep -qi "PUBLIC internet" \
-      || { echo "MISSING: unauthenticated assertion" >&2; exit 1; }
-    echo "$insecureMsgs" | grep -qi "noauth" \
-      || { echo "MISSING: unauthenticated assertion names the target" >&2; exit 1; }
+    # ── warnings: wired token is clean, missing token warns ────────────
+    test -z "$okWarnings" || { echo "UNEXPECTED: warnings with token wired ($okWarnings)" >&2; exit 1; }
+    echo "$missingWarnings" | grep -qi "no tokenFile" \
+      || { echo "MISSING: no-tokenFile warning" >&2; exit 1; }
 
     touch "$out"
     echo "cloudflare-tunnel-config-check passed"
