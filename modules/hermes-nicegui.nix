@@ -172,6 +172,18 @@ in
       '';
     };
 
+    gatewayTokenFile = lib.mkOption {
+      type = lib.types.nullOr lib.types.path;
+      default = null;
+      description = ''
+        Agenix-decrypted env file with HERMES_API_TOKEN, the bearer token the
+        sessions/cron plugins send to the hermes gateway api_server
+        (127.0.0.1:8443). Must match the gateway's API_SERVER_KEY (the
+        api-server-env secret). Without it every gateway call 401s. Loaded as
+        a second systemd EnvironmentFile; no secrets in Nix.
+      '';
+    };
+
     authEnabled = lib.mkOption {
       type = lib.types.bool;
       default = true;
@@ -255,6 +267,11 @@ in
         # is not the interactive shell's, and this must not drift from the
         # agent's own binary.
         HERMES_CLI_BIN = "${agent.package}/bin/hermes";
+        # Sessions created from the UI default to this model. Must be a valid
+        # gateway model ID: the gateway falls back to "hermes-agent" (invalid)
+        # when the request omits a model, which 400s on the first chat turn.
+        HERMES_DEFAULT_MODEL = config.hermesDeploy.model;
+        HERMES_DEFAULT_PROVIDER = config.hermesDeploy.provider;
         HERMES_KANBAN_URL = cfg.kanbanUrl;
         HERMES_DATA_DIR = cfg.dataDir;
         HERMES_FILES_ROOT = cfg.filesRoot;
@@ -269,10 +286,12 @@ in
 
         ExecStart = "${pyEnv}/bin/python ${cfg.stateDir}/src/main.py";
 
-        # Kanban creds come from the agenix env file, as process env vars
-        # (which win over any .env file the app also loads).
+        # Kanban creds + gateway bearer token come from agenix env files, as
+        # process env vars (which win over any .env file the app also loads).
         EnvironmentFile = lib.optionals (cfg.environmentFile != null) [
           cfg.environmentFile
+        ] ++ lib.optionals (cfg.gatewayTokenFile != null) [
+          cfg.gatewayTokenFile
         ];
 
         Restart = "always";

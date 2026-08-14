@@ -27,8 +27,17 @@ in
     # inject a fake provider instead of a real one.
     model = lib.mkOption {
       type = lib.types.str;
-      default = "openrouter/anthropic/claude-sonnet-4";
+      default = "deepseek-v4-flash";
       description = "Default model identifier for Hermes.";
+    };
+
+    # Inference provider for the default model (hermes_cli.auth
+    # PROVIDER_REGISTRY id). Defaults to opencode-go, matching the operator's
+    # own assistant model; key lives in hermes-env as OPENCODE_GO_API_KEY.
+    provider = lib.mkOption {
+      type = lib.types.str;
+      default = "opencode-go";
+      description = "Inference provider id for the default model.";
     };
   };
 
@@ -45,6 +54,7 @@ in
       # over anything the agent writes, so a bot cannot lock itself out.
       settings = {
         model.default = config.hermesDeploy.model;
+        model.provider = config.hermesDeploy.provider;
 
         # Native backend: commands run as the hermes user on the host.
         # The bot edits this flake and deploys, instead of mutating state.
