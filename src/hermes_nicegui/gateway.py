@@ -51,6 +51,8 @@ class Session:
     archived: bool = False
     last_active: float | None = None
     preview: str | None = None
+    last_activity_description: str | None = None
+    last_activity_provenance: str | None = None
 
     @classmethod
     def from_json(cls, data: dict[str, Any]) -> Session:
@@ -71,6 +73,8 @@ class Session:
             archived=data.get("archived", False),
             last_active=data.get("last_active"),
             preview=data.get("preview"),
+            last_activity_description=data.get("last_activity_description"),
+            last_activity_provenance=data.get("last_activity_provenance"),
         )
 
 
@@ -330,9 +334,13 @@ class HermesClient:
         *,
         transport: httpx.AsyncBaseTransport | None = None,
         timeout: float = 120.0,
+        default_model: str = "",
+        default_provider: str = "",
     ) -> None:
         self.base_url = base_url.rstrip("/")
         self.token = token
+        self.default_model = default_model
+        self.default_provider = default_provider
         headers = {"Authorization": f"Bearer {token}"} if token else {}
         self._client = httpx.AsyncClient(
             base_url=self.base_url,
@@ -404,6 +412,14 @@ class HermesClient:
         body: dict[str, Any] = {}
         if title:
             body["title"] = title
+        # Always send an explicit model. The gateway otherwise defaults the
+        # session to the placeholder "hermes-agent" model name, which its
+        # router rejects with HTTP 400 on the first chat turn. The UI's
+        # default model (HERMES_DEFAULT_MODEL) is a routable provider model.
+        if self.default_model:
+            body["model"] = self.default_model
+        if self.default_provider:
+            body["provider"] = self.default_provider
         data = await self._request("POST", "/api/sessions", json=body)
         inner = data.get("session") or data
         return Session.from_json(inner)
@@ -563,3 +579,15 @@ class HermesClient:
             if event.event == "assistant.completed":
                 return event.data.get("content", "")
         return ""
+
+    async def stop_run(self, run_id: str) -> dict[str, Any]:
+        """POST /v1/runs/{run_id}/stop -- interrupt a running agent turn.
+
+        The gateway cooperatively interrupts the live agent (and reaps any
+        background processes it spawned). Every SSE event from a ``/chat/stream``
+        turn carries the ``run_id`` in its payload, so a client that tracks the
+        last-seen run id can always target the turn it is currently streaming.
+        Unknown/already-finished runs answer 404/409 -- callers should treat
+        those as already-stopped.
+        """
+        return await self._request("POST", f"/v1/runs/{run_id}/stop")

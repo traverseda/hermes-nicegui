@@ -21,9 +21,10 @@ subsequent read would see, mirroring how the real daemon keeps both in sync.
 
 from __future__ import annotations
 
+import asyncio
 import json
 import sqlite3
-from collections.abc import Callable
+from collections.abc import AsyncIterator, Callable
 from pathlib import Path
 from typing import Any
 
@@ -36,6 +37,20 @@ from hermes_nicegui.executor import CompletedResult, HermesExecutor
 from hermes_nicegui.gateway import HermesClient
 from hermes_nicegui.plugin import PluginContext
 from hermes_nicegui.plugins.kanban.gateway import KanbanClient
+
+
+class _AsyncSSEStream(httpx.AsyncByteStream):
+    """Delayed SSE body compatible with HTTPX's async transport interface."""
+
+    def __init__(self, events: list[tuple[str, dict]], delay: float) -> None:
+        self.events = events
+        self.delay = delay
+
+    async def __aiter__(self) -> AsyncIterator[bytes]:
+        for name, data in self.events:
+            yield f"event: {name}\ndata: {json.dumps(data)}\n\n".encode()
+            if self.delay > 0:
+                await asyncio.sleep(self.delay)
 
 
 class FakeHermes:
@@ -58,6 +73,11 @@ class FakeHermes:
         self.messages: dict[str, list[dict]] = {}
         self.stream_events: list[tuple[str, dict]] = []
         self.jobs: list[dict] = []
+        # Per-test knobs: a >0 stream_delay dribbles SSE events out slowly so
+        # tests can exercise mid-stream controls (stop, queue); stop_calls
+        # records every run id a stop was requested for.
+        self.stream_delay: float = 0.0
+        self.stop_calls: list[str] = []
         self.reset()
 
     def reset(self) -> None:
@@ -206,7 +226,14 @@ class FakeHermes:
             body = json.loads(request.content) if request.content else {}
             self._record_turn(sid, body.get("input", ""))
             self._mirror_turn(sid, body.get("input", ""))
+            if self.stream_delay > 0:
+                return self._sse_stream(self.stream_events, self.stream_delay)
             return self._sse(self.stream_events)
+        if method == "POST" and path.startswith("/v1/runs/") and path.endswith("/stop"):
+            run_id = path.split("/")[3]
+            self.stop_calls.append(run_id)
+            self.stream_delay = 0.0
+            return self._json({"run_id": run_id, "status": "stopping"})
         if method == "GET" and path == "/api/jobs":
             return self._json({"jobs": self.jobs})
         if method == "POST" and path == "/api/jobs":
@@ -334,8 +361,23 @@ class FakeHermes:
             f"INSERT INTO sessions ({','.join(_SESSION_COLUMNS)}) "
             f"VALUES ({','.join('?' * len(_SESSION_COLUMNS))})",
             [
-                session["id"], session.get("title"), session.get("source"),
-                session.get("model"), None, None, None, 0, 0, 0, 0, None, 0, 0, None,
+                session["id"],
+                session.get("title"),
+                session.get("source"),
+                session.get("model"),
+                None,
+                None,
+                None,
+                0,
+                0,
+                0,
+                0,
+                None,
+                0,
+                0,
+                None,
+                session.get("last_activity_description"),
+                session.get("last_activity_provenance"),
             ],
         )
         con.commit()
@@ -362,12 +404,28 @@ class FakeHermes:
             f"VALUES ({','.join('?' * len(_MESSAGE_COLUMNS))})",
             [
                 (
-                    next_id, session_id, "user", input_text,
-                    None, None, None, 1786620020.0, None, None,
+                    next_id,
+                    session_id,
+                    "user",
+                    input_text,
+                    None,
+                    None,
+                    None,
+                    1786620020.0,
+                    None,
+                    None,
                 ),
                 (
-                    next_id + 1, session_id, "assistant", final_content,
-                    None, None, None, 1786620021.0, None, None,
+                    next_id + 1,
+                    session_id,
+                    "assistant",
+                    final_content,
+                    None,
+                    None,
+                    None,
+                    1786620021.0,
+                    None,
+                    None,
                 ),
             ],
         )
@@ -387,6 +445,16 @@ class FakeHermes:
         return httpx.Response(
             200,
             content=body.encode(),
+            headers={"Content-Type": "text/event-stream"},
+        )
+
+    def _sse_stream(self, events: list[tuple[str, dict]], delay: float) -> httpx.Response:
+        """A streaming SSE response that dribbles events out with ``delay``
+        seconds between frames, so tests can interact mid-stream."""
+
+        return httpx.Response(
+            200,
+            stream=_AsyncSSEStream(events, delay),
             headers={"Content-Type": "text/event-stream"},
         )
 
@@ -445,7 +513,7 @@ CREATE TABLE sessions (
     message_count INTEGER DEFAULT 0, tool_call_count INTEGER DEFAULT 0,
     input_tokens INTEGER DEFAULT 0, output_tokens INTEGER DEFAULT 0,
     estimated_cost_usd REAL, pinned INTEGER DEFAULT 0, archived INTEGER DEFAULT 0,
-    last_activity_at REAL
+    last_activity_at REAL, last_activity_description TEXT, last_activity_provenance TEXT
 );
 CREATE TABLE messages (
     id INTEGER PRIMARY KEY, session_id TEXT, role TEXT, content TEXT,
@@ -455,13 +523,65 @@ CREATE TABLE messages (
 """
 
 _SESSION_COLUMNS = [
-    "id", "title", "source", "model", "started_at", "ended_at", "end_reason",
-    "message_count", "tool_call_count", "input_tokens", "output_tokens",
-    "estimated_cost_usd", "pinned", "archived", "last_activity_at",
+    "id",
+    "title",
+    "source",
+    "model",
+    "started_at",
+    "ended_at",
+    "end_reason",
+    "message_count",
+    "tool_call_count",
+    "input_tokens",
+    "output_tokens",
+    "estimated_cost_usd",
+    "pinned",
+    "archived",
+    "last_activity_at",
+    "last_activity_description",
+    "last_activity_provenance",
 ]
 _MESSAGE_COLUMNS = [
-    "id", "session_id", "role", "content", "tool_call_id", "tool_calls",
-    "tool_name", "timestamp", "finish_reason", "reasoning",
+    "id",
+    "session_id",
+    "role",
+    "content",
+    "tool_call_id",
+    "tool_calls",
+    "tool_name",
+    "timestamp",
+    "finish_reason",
+    "reasoning",
+]
+
+_EXECUTIONS_SCHEMA = """
+CREATE TABLE executions (
+    id TEXT PRIMARY KEY,
+    job_id TEXT NOT NULL,
+    source TEXT NOT NULL,
+    process_id TEXT NOT NULL,
+    pid INTEGER NOT NULL,
+    process_started_at INTEGER,
+    status TEXT NOT NULL CHECK(status IN
+      ('claimed','running','completed','failed','unknown')),
+    claimed_at TEXT NOT NULL,
+    started_at TEXT,
+    finished_at TEXT,
+    error TEXT
+)
+"""
+_EXECUTION_COLUMNS = [
+    "id",
+    "job_id",
+    "source",
+    "process_id",
+    "pid",
+    "process_started_at",
+    "status",
+    "claimed_at",
+    "started_at",
+    "finished_at",
+    "error",
 ]
 
 
@@ -480,8 +600,11 @@ class FakeHermesCli:
 
     def reset(self) -> None:
         self.jobs_actions = []
+        self.kanban_actions: list[tuple[str, ...]] = []
+        self.kanban_specify_fail = False
         self._init_state_db()
         self._init_jobs_json()
+        self._init_executions_db()
         (self.hermes_home / "profiles" / "ha").mkdir(parents=True, exist_ok=True)
 
     # -- state.db ------------------------------------------------------------
@@ -501,12 +624,42 @@ class FakeHermesCli:
             f"VALUES ({','.join('?' * len(_SESSION_COLUMNS))})",
             [
                 (
-                    "sess-1", "First session", "webui", "deepseek-v4-flash",
-                    None, None, None, 3, 1, 100, 50, 0.001, 0, 0, 1786620319.0,
+                    "sess-1",
+                    "First session",
+                    "webui",
+                    "deepseek-v4-flash",
+                    None,
+                    None,
+                    None,
+                    3,
+                    1,
+                    100,
+                    50,
+                    0.001,
+                    0,
+                    0,
+                    1786620319.0,
+                    "sequential tool running (30s): terminal",
+                    None,
                 ),
                 (
-                    "sess-2", "Cron run", "cron", "deepseek-v4-flash",
-                    None, None, None, 0, 0, 0, 0, None, 0, 0, 1786610000.0,
+                    "sess-2",
+                    "Cron run",
+                    "cron",
+                    "deepseek-v4-flash",
+                    None,
+                    None,
+                    None,
+                    0,
+                    0,
+                    0,
+                    0,
+                    None,
+                    0,
+                    0,
+                    1786610000.0,
+                    None,
+                    None,
                 ),
             ],
         )
@@ -515,15 +668,34 @@ class FakeHermesCli:
             f"VALUES ({','.join('?' * len(_MESSAGE_COLUMNS))})",
             [
                 (
-                    1, "sess-1", "user", "How do I access your API?",
-                    None, None, None, 1786620000.0, None, None,
+                    1,
+                    "sess-1",
+                    "user",
+                    "How do I access your API?",
+                    None,
+                    None,
+                    None,
+                    1786620000.0,
+                    None,
+                    None,
                 ),
                 (
-                    2, "sess-1", "assistant", "Here is the answer.",
-                    None, None, None, 1786620010.0, None, None,
+                    2,
+                    "sess-1",
+                    "assistant",
+                    "Here is the answer.",
+                    None,
+                    None,
+                    None,
+                    1786620010.0,
+                    None,
+                    None,
                 ),
                 (
-                    3, "sess-1", "assistant", "Used a tool to check.",
+                    3,
+                    "sess-1",
+                    "assistant",
+                    "Used a tool to check.",
                     None,
                     json.dumps(
                         [
@@ -534,7 +706,10 @@ class FakeHermesCli:
                             }
                         ]
                     ),
-                    None, 1786620015.0, None, "I needed to list files.",
+                    None,
+                    1786620015.0,
+                    None,
+                    "I needed to list files.",
                 ),
             ],
         )
@@ -620,6 +795,90 @@ class FakeHermesCli:
         jobs.append(job)
         self._save_jobs(jobs)
 
+    def _executions_db_path(self) -> Path:
+        path = self.hermes_home / "cron" / "executions.db"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        return path
+
+    def _init_executions_db(self) -> None:
+        path = self._executions_db_path()
+        if path.exists():
+            path.unlink()
+        con = sqlite3.connect(path)
+        con.executescript(_EXECUTIONS_SCHEMA)
+        con.executemany(
+            f"INSERT INTO executions ({','.join(_EXECUTION_COLUMNS)}) "
+            f"VALUES ({','.join('?' * len(_EXECUTION_COLUMNS))})",
+            [
+                (
+                    "run-1",
+                    "aabbccddeeff",
+                    "builtin",
+                    "proc-1",
+                    101,
+                    1786791100,
+                    "completed",
+                    "2026-08-15T11:51:48.259151+00:00",
+                    "2026-08-15T11:51:49+00:00",
+                    "2026-08-15T11:51:51+00:00",
+                    "",
+                ),
+                (
+                    "run-2",
+                    "aabbccddeeff",
+                    "builtin",
+                    "proc-2",
+                    102,
+                    1786791000,
+                    "completed",
+                    "2026-08-15T10:51:48+00:00",
+                    "2026-08-15T10:51:49+00:00",
+                    "2026-08-15T10:52:01+00:00",
+                    None,
+                ),
+                (
+                    "run-3",
+                    "aabbccddeeff",
+                    "builtin",
+                    "proc-3",
+                    103,
+                    1786790900,
+                    "failed",
+                    "2026-08-15T09:51:48+00:00",
+                    "2026-08-15T09:51:49+00:00",
+                    "2026-08-15T09:51:55+00:00",
+                    "report failed",
+                ),
+                (
+                    "run-other",
+                    "other-job",
+                    "direct",
+                    "proc-4",
+                    104,
+                    1786790800,
+                    "completed",
+                    "2026-08-15T08:51:48+00:00",
+                    "2026-08-15T08:51:49+00:00",
+                    "2026-08-15T08:51:50+00:00",
+                    None,
+                ),
+            ],
+        )
+        con.commit()
+        con.close()
+
+    def insert_run(self, row: dict) -> None:
+        """Add an execution row directly for cron run tests."""
+        con = sqlite3.connect(self._executions_db_path())
+        values = [row.get(col) for col in _EXECUTION_COLUMNS]
+        con.execute(
+            f"INSERT INTO executions ({','.join(_EXECUTION_COLUMNS)}) "
+            f"VALUES ({','.join('?' * len(_EXECUTION_COLUMNS))})",
+            values,
+        )
+        con.commit()
+        con.close()
+
     # -- run_fn ----------------------------------------------------------------
 
     async def run_fn(self, argv: list[str]) -> CompletedResult:
@@ -634,7 +893,36 @@ class FakeHermesCli:
             self.jobs_actions.append(tuple(args))
             self._apply_cron_action(args)
             return CompletedResult(0, "", "")
+        if args[:2] == ["kanban", "specify"]:
+            # Mirror of `hermes kanban specify <id> --json` (the auto-specify
+            # path in plugins/kanban/ui.py): writes the fleshed-out body +
+            # triage -> todo promotion into the same kanban.db the board
+            # reads back, and returns the CLI's --json outcome line.
+            self.kanban_actions.append(tuple(args))
+            return CompletedResult(0, self._apply_kanban_specify(args), "")
         return CompletedResult(1, "", f"unhandled: {args}")
+
+    def _apply_kanban_specify(self, args: list[str]) -> str:
+        task_id = args[2]
+        ok = not self.kanban_specify_fail
+        if ok:
+            db = self.hermes_home / "kanban.db"
+            if db.exists():
+                con = sqlite3.connect(db)
+                con.execute(
+                    "UPDATE tasks SET body = ?, status = 'todo' WHERE id = ?",
+                    ("**Goal**\nFake auto-spec body.", task_id),
+                )
+                con.commit()
+                con.close()
+        return json.dumps(
+            {
+                "task_id": task_id,
+                "ok": ok,
+                "reason": "specified" if ok else "LLM error: simulated failure",
+                "new_title": None,
+            }
+        )
 
     def _apply_cron_action(self, args: list[str]) -> None:
         action = args[1]
@@ -807,9 +1095,20 @@ CREATE TABLE task_runs (
 );
 """
 _TASK_COLUMNS = [
-    "id", "title", "body", "assignee", "status", "priority", "tenant",
-    "created_at", "started_at", "completed_at", "consecutive_failures",
-    "last_failure_error", "current_run_id", "session_id",
+    "id",
+    "title",
+    "body",
+    "assignee",
+    "status",
+    "priority",
+    "tenant",
+    "created_at",
+    "started_at",
+    "completed_at",
+    "consecutive_failures",
+    "last_failure_error",
+    "current_run_id",
+    "session_id",
 ]
 
 
@@ -866,7 +1165,13 @@ class FakeKanban:
                 con.execute(
                     "INSERT INTO task_comments (id, task_id, author, body, created_at) "
                     "VALUES (?, ?, ?, ?, ?)",
-                    (comment["id"], task_id, comment["author"], comment["body"], comment["created_at"]),
+                    (
+                        comment["id"],
+                        task_id,
+                        comment["author"],
+                        comment["body"],
+                        comment["created_at"],
+                    ),
                 )
         con.execute(
             "INSERT INTO task_runs (task_id, status, started_at, outcome, summary) "

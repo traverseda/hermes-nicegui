@@ -1,15 +1,19 @@
-"""Pure helpers for the sessions plugin: no NiceGUI, no I/O.
+"""Pure helpers for the sessions plugin: no NiceGUI, no gateway.
 
-Formatting and filtering rules live here so they can be unit-tested directly
-(see ``tests/test_unread.py``) without going through the NiceGUI ``user``
-test harness. Anything that touches ``app.storage`` or the gateway belongs in
-``ui.py`` instead.
+Formatting/filtering/attachment-path rules live here so they can be
+unit-tested directly (see ``tests/test_unread.py`` and
+``tests/test_session_upload_logic.py``) without going through the NiceGUI
+``user`` test harness. Anything that touches ``app.storage`` or the gateway
+belongs in ``ui.py`` instead.
 """
 
 from __future__ import annotations
 
 import json
+import re
+from collections.abc import Sequence
 from datetime import datetime
+from pathlib import Path
 
 import yaml
 
@@ -85,10 +89,23 @@ def is_unread(session: Session, seen: dict[str, float]) -> bool:
     return session.last_active > seen.get(session.id, 0.0)
 
 
+def is_running(session: Session) -> bool:
+    """Whether an agent is actively working in the session right now.
+
+    The daemon writes ``last_activity_description`` (rate-limited) during an
+    in-flight turn and clears it in the turn's ``finally`` (hermes
+    ``StateStore.clear_session_activity_labels``), so a non-empty label on an
+    un-ended session is the durable signal of live work from any surface --
+    webui chat, cron, API, kanban worker. An ended session never counts.
+    """
+    return session.ended_at is None and bool(session.last_activity_description)
+
+
 _SOURCE_ICONS = {
     "webui": "language",
     "api_server": "api",
     "cron": "schedule",
+    "kanban": "view_kanban",
 }
 
 
@@ -127,3 +144,64 @@ def pretty_yaml(text: str) -> str:
         return text
     parsed = _strip_trailing_whitespace(parsed)
     return yaml.dump(parsed, Dumper=_BlockStringDumper, sort_keys=False, allow_unicode=True)
+
+
+# -- chat attachments ----------------------------------------------------
+
+
+def sanitize_filename(name: str) -> str:
+    """A safe filename: basename only, no path separators or control chars.
+
+    Some browsers report a full path (``C:\\fakepath\\x``, ``/home/u/x``);
+    reducing to the basename is what stops an upload from escaping the
+    uploads directory through its own name. Control characters and the
+    Windows trailing-dot/space hazard are stripped too. Falls back to
+    ``upload`` when nothing usable remains.
+    """
+    basename = (name or "").replace("\\", "/").rsplit("/", 1)[-1].strip()
+    cleaned = re.sub(r"[\x00-\x1f\x7f]", "", basename).strip(" .")
+    return cleaned or "upload"
+
+
+_UPLOAD_COMPONENT_RE = re.compile(r"[^A-Za-z0-9._-]+")
+
+
+def _safe_component(value: str, fallback: str) -> str:
+    """Scrub a free-form string (a session id) down to a safe path component."""
+    cleaned = _UPLOAD_COMPONENT_RE.sub("-", value or "").strip("-.")
+    return cleaned or fallback
+
+
+def upload_target(uploads_root: Path, session_id: str, filename: str) -> Path:
+    """Collision-safe destination for one chat attachment.
+
+    Files land in ``<uploads_root>/<sanitized-session-id>/``; a name already
+    present gets a `` (1)``/`` (2)`` suffix instead of being silently
+    overwritten. The parent directory is not created here -- the save itself
+    does that -- so a name is only ever de-duplicated against files that
+    already exist.
+    """
+    safe_name = sanitize_filename(filename)
+    directory = uploads_root / _safe_component(session_id, "session")
+    stem, suffix = Path(safe_name).stem, Path(safe_name).suffix
+    candidate = directory / safe_name
+    counter = 1
+    while candidate.exists():
+        candidate = directory / f"{stem} ({counter}){suffix}"
+        counter += 1
+    return candidate
+
+
+def attachment_block(paths: Sequence[str]) -> str:
+    """The text appended to a user message for its attached files.
+
+    A short explicit block (not bare paths) so the agent sees the files are
+    intentional attachments, each an absolute path its own file tools can
+    open -- the same path-reference convention every other Hermes surface
+    uses for inbound media.
+    """
+    if not paths:
+        return ""
+    lines = ["Attached files:"]
+    lines += [f"- {path}" for path in paths]
+    return "\n".join(lines)

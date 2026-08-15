@@ -77,6 +77,15 @@ class Settings(BaseSettings):
     files_root: str = "."
     files_edit_max_bytes: int = 2 * 1024 * 1024
 
+    # The `sessions` chat's file attachments are saved to this directory on
+    # this host: the agent runs on the same box, so a path the UI can write
+    # is a path the agent's own file tools can read. Empty -> `<hermes_home>`
+    # `/uploads`, which on the deploy box is inside the agent's home and in
+    # this service's ReadWritePaths. Per-file cap in bytes (default 25 MiB,
+    # matching the gateway's own media cap).
+    chat_uploads_dir: str = ""
+    chat_upload_max_bytes: int = 25 * 1024 * 1024
+
     @property
     def disabled_plugins(self) -> list[str]:
         """Plugin names to skip at startup, split on commas."""
@@ -92,6 +101,19 @@ class Settings(BaseSettings):
         return Path(self.files_root).expanduser().resolve()
 
     @property
+    def chat_uploads_dir_path(self) -> Path:
+        """Where chat attachments are stored; defaults under ``hermes_home``.
+
+        ``hermes_home`` is the daemon's own directory (state.db and friends),
+        so the default keeps uploaded files next to the data they belong to
+        and inside the same writable area the service already has.
+        """
+        configured = self.chat_uploads_dir.strip()
+        if configured:
+            return Path(configured).expanduser().resolve()
+        return Path(self.hermes_home).expanduser().resolve() / "uploads"
+
+    @property
     def data_dir_path(self) -> Path:
         return Path(self.data_dir).expanduser().resolve()
 
@@ -100,4 +122,6 @@ class Settings(BaseSettings):
         return {
             "base_url": self.gateway_url,
             "token": self.api_token,
+            "default_model": self.default_model,
+            "default_provider": self.default_provider,
         }

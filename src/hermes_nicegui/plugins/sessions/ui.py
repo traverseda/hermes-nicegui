@@ -1,14 +1,11 @@
 """Sessions plugin pages: session list, a per-session event timeline, and chat.
 
-The transcript reads as a compact chat: what was actually *said* (user
-input, Hermes' replies) renders as visible bubbles; everything mechanical
-that happened in between (reasoning, tool calls, tool results) renders as a
-single collapsed row per event, identified by icon and color rather than a
-repeated text label -- see ``_step``/``_tool_round_trip``/``_chat_bubble``.
+The transcript reads as a compact chat timeline: live and historical turns use
+the same entry types for user input, reasoning, tool calls/results, and Hermes'
+replies. Live reasoning and tool events are shown as they arrive, then the
+authoritative per-turn transcript from ``run.completed`` replaces the
+synthetic live entries so a completed turn is identical to a reload.
 Timestamps are available on hover (tooltip) rather than printed on every row.
-A turn actively streaming in (``send()``, below) gets these same rows live,
-as its own ``tool.progress``/``tool.started`` SSE events arrive -- see
-``_live_tool_call``.
 
 Session *reads* (list, detail, rename, delete) go straight at the daemon's
 own SQLite ``state.db`` for whichever profile is active for this browser tab
@@ -24,31 +21,41 @@ wasn't an actual chat interface.
 
 from __future__ import annotations
 
+import asyncio
 import json
 from collections.abc import Callable
 from datetime import datetime
 from functools import partial
+from pathlib import Path
 from typing import Any
 
 from nicegui import app, background_tasks, ui
+from nicegui.events import UploadEventArguments
 
 from hermes_nicegui import web
 from hermes_nicegui.gateway import HermesError, Message, Session
 from hermes_nicegui.pagination import Pager, render_pager
 from hermes_nicegui.plugin import Plugin
 from hermes_nicegui.plugins.sessions.logic import (
+    attachment_block,
     fmt_age,
     fmt_cost,
     fmt_ts,
+    is_running,
     is_unread,
     oneline,
     pretty_yaml,
     source_icon,
+    upload_target,
 )
 from hermes_nicegui.web import frame
 
 SOURCES = {"": "All sources", "webui": "Web UI", "api_server": "API", "cron": "Cron"}
 _SEEN_KEY = "sessions_seen"
+
+#: Cap on chat attachments awaiting send in one message (the uploader's own
+#: ``max-files`` prop enforces the same limit client-side).
+_MAX_CHAT_ATTACHMENTS = 8
 
 
 def _unread_state() -> dict[str, float]:
@@ -61,11 +68,13 @@ def _unread_state() -> dict[str, float]:
 
 # -- transcript rendering ---------------------------------------------------
 #
-# Every event -- said or done -- gets exactly one ``ui.timeline_entry``. The
-# icon+color say what kind of event it is; no separate title/subtitle text
+# Historical messages and live SSE events converge on the same timeline entry
+# types. Every event -- said or done -- gets exactly one ``ui.timeline_entry``.
+# The icon+color say what kind of event it is; no separate title/subtitle text
 # duplicates that. Timestamps sit behind a hover tooltip on that same icon
 # (see ``_icon_tooltip``) rather than a separate element or a permanently
-# visible subtitle.
+# visible subtitle. A completed live turn is rebuilt from its authoritative
+# ``run.completed`` transcript by the detail page closure below.
 
 # Quasar's own rule for an icon entry's subtitle is `padding-top: 8px`
 # (`.q-timeline__entry--icon .q-timeline__subtitle`); the icon glyph itself
@@ -88,6 +97,31 @@ _TIMELINE_CSS = """
 }
 .q-timeline__content {
     padding: 0 !important;
+}
+"""
+
+# The chat composer's uploader is Quasar's QUploader styled down to a bare
+# "+" button: no header background/title, no uploaded-file list (attachments
+# render as our own chips instead). The header itself is the file-picker
+# hit area (Quasar's hidden `q-uploader__input` overlays it), so a compact
+# header is also a compact click/drag-drop target.
+_UPLOADER_CSS = """
+.chat-uploader .q-uploader__header {
+    min-height: 0 !important;
+    padding: 2px !important;
+    background: transparent !important;
+    color: inherit !important;
+    box-shadow: none !important;
+}
+.chat-uploader .q-uploader__header-content {
+    gap: 0 !important;
+}
+.chat-uploader .q-uploader__title,
+.chat-uploader .q-uploader__subtitle {
+    display: none !important;
+}
+.chat-uploader .q-uploader__list {
+    display: none !important;
 }
 """
 
@@ -222,6 +256,47 @@ def _chat_bubble_shell(icon: str, color: str, sender: str, timestamp: float | No
         return ui.markdown()
 
 
+def _live_body_entry(
+    icon: str, color: str, header: str, timestamp: float | None
+) -> ui.markdown:
+    """Build an open, incrementally updated timeline body for live reasoning."""
+    entry = ui.timeline_entry(icon=icon, color=color).mark("live-reasoning")
+    _icon_tooltip(entry, timestamp)
+    with entry.add_slot("subtitle"):
+        with ui.expansion(header, value=True).props("dense").classes("text-xs w-full"):
+            return ui.markdown()
+
+
+class _LiveToolEntry:
+    """Mutable controls for a tool row while its SSE lifecycle is active."""
+
+    def __init__(
+        self,
+        row: ui.row,
+        spinner: ui.spinner,
+        label: ui.label,
+    ) -> None:
+        self.row = row
+        self.spinner = spinner
+        self.label = label
+        self.done_mark: ui.icon | None = None
+
+
+def _live_tool_entry(
+    name: str, args_preview: str | None, timestamp: float | None
+) -> _LiveToolEntry:
+    """Build the compact live tool row that is finalized by tool SSE events."""
+    preview = oneline(args_preview, limit=60) if args_preview else ""
+    label_text = f"{name}: {preview}" if preview else name
+    entry = ui.timeline_entry(icon="construction", color="grey").mark("live-tool")
+    _icon_tooltip(entry, timestamp)
+    with entry.add_slot("subtitle"):
+        with ui.row().classes("items-center gap-2 text-xs w-full") as row:
+            spinner = ui.spinner(size="sm")
+            label = ui.label(label_text)
+    return _LiveToolEntry(row, spinner, label)
+
+
 def _chat_bubble(
     icon: str,
     color: str,
@@ -299,27 +374,6 @@ def _tool_round_trip(
     _collapsible_entry("construction", "grey", label, timestamp, _body if has_body else None)
 
 
-def _live_tool_call(name: str, preview: str | None, args: dict | None, timestamp: float | None) -> None:
-    """One live row for a ``tool.started`` event during an in-progress turn.
-
-    Unlike :func:`_tool_round_trip` (built from a completed session's stored
-    messages, where a call and its result are matched by ``tool_call_id``),
-    the live SSE stream's ``tool.completed``/``tool.failed`` events carry no
-    call id and no result -- only the tool name (confirmed against the
-    Hermes Agent server: ``result``/``duration`` are captured into the
-    progress callback's ``**kwargs`` and never forwarded to the SSE payload).
-    There is nothing to fuse a completion onto, so this renders only the
-    call itself; the transcript gains the real, fused round trip once the
-    page is reloaded and reads it back from ``state.db``.
-    """
-    label = f"{name}: {oneline(preview, limit=60)}" if preview else name
-
-    def _body() -> None:
-        ui.code(pretty_yaml(json.dumps(args)), language="yaml").classes("w-full")
-
-    _collapsible_entry("construction", "grey", label, timestamp, _body if args else None)
-
-
 def render_transcript_events(messages: list[Message]) -> None:
     """Render the whole transcript as a true, chronological event timeline.
 
@@ -387,6 +441,12 @@ def render_transcript_events(messages: list[Message]) -> None:
 def register_pages(plugin: Plugin) -> None:
     logger = plugin.logger
     client = plugin.client  # gateway client -- only used to send chat turns
+    settings = plugin.settings
+    # Attachments are saved under this local directory (the daemon runs on
+    # the same box, so the path is readable by the agent's own file tools);
+    # ``chat_uploads_dir_path`` defaults to ``<hermes_home>/uploads``.
+    uploads_root = settings.chat_uploads_dir_path
+    max_upload_bytes = settings.chat_upload_max_bytes
 
     def _mark_read(session_id: str) -> None:
         _unread_state()[session_id] = datetime.now().timestamp()
@@ -502,6 +562,8 @@ def register_pages(plugin: Plugin) -> None:
                         )
                         ui.item_label(s.preview or "No preview").props("caption lines=1")
                     with ui.item_section().props("side top"):
+                        if is_running(s):
+                            ui.spinner(size="sm", color="positive").mark("session-running")
                         ui.label(fmt_age(s.last_active)).classes("text-xs opacity-60")
                         if unread:
                             ui.icon("circle", size="8px", color="primary")
@@ -568,6 +630,7 @@ def register_pages(plugin: Plugin) -> None:
     @ui.page("/sessions/{session_id}", title="Session")
     async def session_detail_page(session_id: str) -> None:
         ui.add_css(_TIMELINE_CSS)
+        ui.add_css(_UPLOADER_CSS)
         with frame(active="/sessions"):
             await ui.context.client.connected()
             store = web.current_store()
@@ -586,12 +649,30 @@ def register_pages(plugin: Plugin) -> None:
                     f"cost {fmt_cost(session.estimated_cost_usd)}"
                 )
 
+            def _update_running_indicator(active: bool, description: str | None = None) -> None:
+                running_indicator.set_visibility(active)
+                if active:
+                    desc = description or "Working…"
+                    running_desc.set_text(oneline(desc, limit=48))
+                    running_tooltip.set_text(desc)
+
             with ui.card():
                 with ui.row():
                     ui.label(session.title or session.id)
                     ui.space()
                     ui.badge(session.source or "unknown", color="grey")
                     ui.badge(session.model or "no model", color="primary")
+                    with (
+                        ui.row()
+                        .classes("items-center gap-1")
+                        .mark("session-running")
+                    ) as running_indicator:
+                        ui.spinner(size="1em", color="positive")
+                        ui.label("Running").classes("text-xs font-bold text-positive")
+                        running_desc = ui.label("").classes("text-xs opacity-80")
+                        with running_desc:
+                            running_tooltip = ui.tooltip("")
+                    running_indicator.set_visibility(False)
                 stats_label = ui.label(_stats_text())
                 with ui.row():
                     ui.input(
@@ -605,6 +686,7 @@ def register_pages(plugin: Plugin) -> None:
                         color="negative",
                         on_click=partial(_delete, session_id, lambda: ui.navigate.to("/sessions")),
                     )
+            _update_running_indicator(is_running(session), session.last_activity_description)
 
             # Only the latest page of messages is ever fetched/rendered up
             # front -- a session can run to thousands of messages, and
@@ -618,6 +700,21 @@ def register_pages(plugin: Plugin) -> None:
             transcript = ui.column().classes("w-full")
             timeline: ui.timeline | None = None
             loading_more = False
+
+            # Live-turn control state. While a turn streams we keep the compose
+            # box enabled and *queue* further messages so the user is never
+            # blocked mid-think and nothing is silently dropped; the stop button
+            # interrupts the running turn via the gateway's run-scoped stop
+            # endpoint, plus a client-side stream abort (which the gateway also
+            # treats as an interrupt).
+            streaming = False
+            stream_task: asyncio.Task | None = None
+            current_run_id: str | None = None
+            queued_text: str | None = None
+            # Files picked in the composer, awaiting send: {"name", "path",
+            # "size"}. Cleared once they're attached to a message (sent or
+            # queued) or individually removed.
+            pending_attachments: list[dict[str, Any]] = []
 
             def _render_earlier_button() -> None:
                 earlier_row.clear()
@@ -694,115 +791,341 @@ def register_pages(plugin: Plugin) -> None:
                 `loaded_messages[0]`, the oldest, never these)."""
                 return (loaded_messages[-1].id if loaded_messages else 0) + 1
 
-            async def send() -> None:
-                nonlocal session
-                text = (message_input.value or "").strip()
-                if not text:
-                    return
-                message_input.set_value("")
-                message_input.disable()
-                send_button.disable()
+            def _append_local_message(
+                role: str, content: str, timestamp: float | None = None
+            ) -> None:
+                """Track a locally-rendered message so a later transcript
+                rebuild ("Load earlier") doesn't clobber it."""
+                loaded_messages.append(
+                    Message(
+                        id=_next_local_id(),
+                        session_id=session_id,
+                        role=role,
+                        content=content,
+                        timestamp=timestamp or datetime.now().timestamp(),
+                    )
+                )
+
+            def _queue_message(text: str) -> None:
+                """Mid-turn send: show the message immediately, marked queued,
+                so nothing the user typed is silently swallowed."""
+                nonlocal queued_text
+                queued_text = (
+                    f"{queued_text}\n{text}".strip() if queued_text else text
+                )
                 sent_at = datetime.now().timestamp()
-                content = ""
+                with _timeline():
+                    _chat_bubble("person", "primary", "You", text, sent_at)
+                    with ui.row().classes(
+                        "items-center gap-2 text-xs opacity-60 q-mb-sm"
+                    ):
+                        ui.icon("schedule")
+                        ui.label("Queued — will send after this turn completes")
+                _scroll_to_bottom(transcript)
+                _append_local_message("user", text, sent_at)
+
+            async def _run_turn(
+                text: str, *, user_bubble_shown: bool = False
+            ) -> None:
+                """Stream one turn, using the same entries as the transcript.
+
+                ``user_bubble_shown`` is True for queued turns whose bubble was
+                already rendered by :func:`_queue_message`; only the reply half
+                is added then. The gateway's completed transcript is preferred
+                when available because tool results are not present in tool SSE
+                events and the daemon is the source of truth.
+                """
+                nonlocal session, current_run_id
+                current_run_id = None
+                stop_button.set_visibility(True)
+                _update_running_indicator(True, "Thinking…")
+                sent_at = datetime.now().timestamp()
+                turn_start = len(loaded_messages)
+                reasoning_text = ""
+                reasoning_md: ui.markdown | None = None
+                active_tool: _LiveToolEntry | None = None
+                reply_md: ui.markdown | None = None
+                reply_content = ""
+                reconciled = False
                 try:
                     with _timeline():
-                        _chat_bubble("person", "primary", "You", text, sent_at)
+                        if not user_bubble_shown:
+                            _chat_bubble("person", "primary", "You", text, sent_at)
                         with ui.row().classes(
                             "items-center gap-2 text-xs opacity-60 q-mb-sm"
                         ) as status_row:
                             ui.spinner(size="1em")
-                            status_label = ui.label("Thinking…")
-                        reply_markdown = _chat_bubble_shell(
-                            "smart_toy", "secondary", "Hermes", None
-                        )
+                            ui.label("Thinking…")
                     _scroll_to_bottom(transcript)
                     try:
                         async for event in client.stream_turn(
                             session_id, text, model=session.model
                         ):
                             timestamp = event.data.get("ts")
-                            if event.event == "tool.progress":
-                                # The only ``tool.progress`` this endpoint ever
-                                # emits is a reasoning step (tool_name
-                                # "_thinking") -- see _live_tool_call's
-                                # docstring for the matching note on
-                                # tool.started/completed.
-                                delta = event.data.get("delta", "")
-                                status_label.set_text(
-                                    oneline(delta, limit=60) if delta else "Thinking…"
-                                )
-                                if delta:
-                                    with _timeline():
-                                        _step("psychology", "amber", delta, timestamp)
-                            elif event.event == "tool.started":
+                            if event.event == "run.started":
+                                current_run_id = event.data.get("run_id") or current_run_id
+                            elif event.event == "tool.progress":
                                 name = event.data.get("tool_name", "tool")
-                                status_label.set_text(f"Running {name}…")
+                                delta = str(event.data.get("delta", ""))
+                                if name == "_thinking":
+                                    if delta:
+                                        reasoning_text += delta
+                                    if reasoning_md is None:
+                                        with _timeline():
+                                            reasoning_md = _live_body_entry(
+                                                "psychology",
+                                                "amber",
+                                                oneline(reasoning_text)
+                                                if reasoning_text
+                                                else "Thinking…",
+                                                timestamp,
+                                            )
+                                        _scroll_to_bottom(transcript)
+                                    reasoning_md.set_content(reasoning_text)
+                                    status_row.set_visibility(False)
+                                elif active_tool is not None:
+                                    active_tool.label.set_text(oneline(delta, limit=60))
+                                    status_row.set_visibility(False)
+                            elif event.event == "tool.started":
+                                args = event.data.get("args") or event.data.get("preview")
                                 with _timeline():
-                                    _live_tool_call(
-                                        name,
-                                        event.data.get("preview"),
-                                        event.data.get("args"),
+                                    active_tool = _live_tool_entry(
+                                        str(event.data.get("tool_name", "tool")),
+                                        str(args) if args else None,
                                         timestamp,
                                     )
-                            elif event.event == "tool.completed":
-                                status_label.set_text(
-                                    f"{event.data.get('tool_name', 'tool')} done"
-                                )
-                            elif event.event == "tool.failed":
-                                status_label.set_text(
-                                    f"{event.data.get('tool_name', 'tool')} failed"
-                                )
+                                status_row.set_visibility(False)
+                                _scroll_to_bottom(transcript)
+                            elif event.event in {"tool.completed", "tool.failed"}:
+                                if active_tool is not None:
+                                    active_tool.spinner.delete()
+                                    icon = (
+                                        "error"
+                                        if event.event == "tool.failed"
+                                        else "check_circle"
+                                    )
+                                    marker = (
+                                        "live-tool-failed"
+                                        if event.event == "tool.failed"
+                                        else "live-tool-done"
+                                    )
+                                    with active_tool.row:
+                                        active_tool.done_mark = ui.icon(icon).mark(marker)
+                                    active_tool = None
+                                _scroll_to_bottom(transcript)
                             elif event.event == "assistant.delta":
+                                if reply_md is None:
+                                    with _timeline():
+                                        reply_md = _chat_bubble_shell(
+                                            "smart_toy", "secondary", "Hermes", timestamp
+                                        )
+                                reply_content += event.data.get("delta", "")
+                                reply_md.set_content(reply_content)
                                 status_row.set_visibility(False)
-                                content += event.data.get("delta", "")
-                                reply_markdown.set_content(content)
+                                _scroll_to_bottom(transcript)
                             elif event.event == "assistant.completed":
+                                if reply_md is None:
+                                    with _timeline():
+                                        reply_md = _chat_bubble_shell(
+                                            "smart_toy", "secondary", "Hermes", timestamp
+                                        )
+                                reply_content = event.data.get("content", reply_content)
+                                reply_md.set_content(reply_content)
                                 status_row.set_visibility(False)
-                                content = event.data.get("content", content)
-                                reply_markdown.set_content(content)
-                            _scroll_to_bottom(transcript)
+                                _scroll_to_bottom(transcript)
+                            elif event.event == "run.completed":
+                                # Some gateway versions omit the terminal
+                                # tool.completed event when the run ends; the
+                                # run boundary still gives the live row a
+                                # definitive successful completion state.
+                                if active_tool is not None:
+                                    active_tool.spinner.delete()
+                                    with active_tool.row:
+                                        active_tool.done_mark = ui.icon(
+                                            "check_circle"
+                                        ).mark("live-tool-done")
+                                    active_tool = None
+                                messages = event.data.get("messages")
+                                if isinstance(messages, list) and messages:
+                                    del loaded_messages[turn_start:]
+                                    if not user_bubble_shown:
+                                        _append_local_message("user", text, sent_at)
+                                    loaded_messages.extend(
+                                        Message.from_json(message)
+                                        for message in messages
+                                        if isinstance(message, dict)
+                                    )
+                                    _render_transcript()
+                                    _scroll_to_bottom(transcript)
+                                    reconciled = True
                     except HermesError as exc:
                         status_row.set_visibility(False)
                         ui.notify(f"Message failed: {exc}", type="negative")
                 finally:
-                    message_input.enable()
-                    send_button.enable()
+                    current_run_id = None
+                    stop_button.set_visibility(False)
                     message_input.run_method("focus")
 
-                # Keep the in-memory page in sync with what's now on screen,
-                # so a later "Load earlier" (which rebuilds the transcript
-                # from `loaded_messages`, see `_render_transcript`) doesn't
-                # clobber the turn just sent -- it never went through a
-                # `get_messages_page` fetch, only straight onto the timeline
-                # above.
-                loaded_messages.append(
-                    Message(
-                        id=_next_local_id(),
-                        session_id=session_id,
-                        role="user",
-                        content=text,
-                        timestamp=sent_at,
-                    )
-                )
-                loaded_messages.append(
-                    Message(
-                        id=_next_local_id(),
-                        session_id=session_id,
-                        role="assistant",
-                        content=content,
-                        timestamp=datetime.now().timestamp(),
-                    )
-                )
+                if not reconciled and not user_bubble_shown:
+                    _append_local_message("user", text, sent_at)
+                if not reconciled:
+                    _append_local_message("assistant", reply_content)
 
+            async def send() -> None:
+                nonlocal session, streaming, stream_task, queued_text
+                text = (message_input.value or "").strip()
+                if not text and not pending_attachments:
+                    return
+                message_input.set_value("")
+                if pending_attachments:
+                    block = attachment_block([att["path"] for att in pending_attachments])
+                    text = "\n\n".join(part for part in (text, block) if part)
+                    pending_attachments.clear()
+                    _render_attachments()
+                if streaming:
+                    # A turn is already running: hold the message and deliver
+                    # it as the next turn instead of firing a second concurrent
+                    # agent run against the same session.
+                    _queue_message(text)
+                    return
+                streaming = True
+                stream_task = asyncio.current_task()
+                try:
+                    first = True
+                    while True:
+                        await _run_turn(text, user_bubble_shown=not first)
+                        if not queued_text:
+                            break
+                        text = queued_text
+                        queued_text = None
+                        first = False
+                finally:
+                    streaming = False
+                    stream_task = None
+                # Turn(s) finished (or were stopped) — refresh the header stats.
                 try:
                     session = await store.sessions.get_session(session_id)
                 except HermesError:
                     pass
                 else:
                     stats_label.set_text(_stats_text())
+                    _update_running_indicator(
+                        is_running(session), session.last_activity_description
+                    )
+
+            async def _do_stop() -> None:
+                nonlocal queued_text, stream_task
+                if not streaming:
+                    return
+                run_id = current_run_id
+                if run_id:
+                    try:
+                        await client.stop_run(run_id)
+                    except HermesError as exc:
+                        ui.notify(f"Stop request failed: {exc}", type="warning")
+                # Return anything queued to the box so it is never swallowed.
+                if queued_text:
+                    message_input.set_value(queued_text)
+                    queued_text = None
+                # Abort the local stream. The gateway also treats an SSE client
+                # disconnect as an interrupt, so this covers the brief window
+                # before run.started delivered a run_id.
+                task = stream_task
+                if task is not None and not task.done():
+                    task.cancel()
+                ui.notify("Stopped", type="info")
+
+            def _stop() -> None:
+                _run_in_client(_do_stop)
+
+            def _fmt_size(num_bytes: int) -> str:
+                if num_bytes >= 1024 * 1024:
+                    return f"{num_bytes / (1024 * 1024):.1f} MiB"
+                if num_bytes >= 1024:
+                    return f"{num_bytes / 1024:.0f} KiB"
+                return f"{num_bytes} B"
+
+            def _render_attachments() -> None:
+                """Rebuild the pending-attachment chips above the compose box."""
+                attachments_row.clear()
+                if not pending_attachments:
+                    attachments_row.set_visibility(False)
+                    return
+                attachments_row.set_visibility(True)
+                with attachments_row:
+                    for index, att in enumerate(pending_attachments):
+                        with (
+                            ui.row()
+                            .classes("items-center gap-1 q-px-sm q-py-xs bg-grey-3 rounded-borders")
+                            .mark("chat-attachment")
+                        ):
+                            ui.icon("attach_file", size="sm")
+                            ui.label(att["name"]).classes("text-xs")
+                            ui.label(_fmt_size(att["size"])).classes("text-xs opacity-60")
+                            ui.button(
+                                icon="close",
+                                on_click=partial(_remove_attachment, index),
+                            ).props("flat round dense size=sm").mark("chat-attachment-remove")
+
+            def _remove_attachment(index: int) -> None:
+                """Drop a pending attachment (and its file on disk -- it was
+                never sent, so leaving it would just litter the uploads dir)."""
+                removed = pending_attachments.pop(index)
+                try:
+                    Path(removed["path"]).unlink(missing_ok=True)
+                except OSError:
+                    logger.warning("failed to delete discarded chat attachment {}", removed["path"])
+                _render_attachments()
+
+            async def _on_upload(event: UploadEventArguments) -> None:
+                """Save one picked file under the uploads dir and chip it.
+
+                The uploader's own ``max_file_size`` prop already rejects
+                oversize files client-side; the check here is the server-side
+                backstop (the test suite drives ``handle_uploads`` directly,
+                bypassing the client).
+                """
+                file = event.file
+                if file.size() > max_upload_bytes:
+                    ui.notify(
+                        f"{file.name}: too large ({_fmt_size(file.size())} "
+                        f"> {_fmt_size(max_upload_bytes)})",
+                        type="negative",
+                    )
+                    return
+                if len(pending_attachments) >= _MAX_CHAT_ATTACHMENTS:
+                    ui.notify(
+                        f"Too many attachments (max {_MAX_CHAT_ATTACHMENTS})",
+                        type="negative",
+                    )
+                    return
+                try:
+                    target = upload_target(uploads_root, session_id, file.name)
+                    await file.save(target)
+                except OSError as exc:
+                    logger.warning("failed to save chat attachment {}: {}", file.name, exc)
+                    ui.notify(f"Failed to save '{file.name}': {exc}", type="negative")
+                    return
+                pending_attachments.append(
+                    {"name": file.name, "path": str(target), "size": file.size()}
+                )
+                _render_attachments()
 
             with ui.card().classes("w-full sticky bottom-0 z-10"):
+                attachments_row = ui.row().classes("w-full items-center gap-2 flex-wrap")
+                attachments_row.set_visibility(False)
                 with ui.row().classes("w-full items-center gap-2"):
+                    ui.upload(
+                        multiple=True,
+                        auto_upload=True,
+                        max_file_size=max_upload_bytes,
+                        max_files=_MAX_CHAT_ATTACHMENTS,
+                        on_upload=_on_upload,
+                        on_rejected=lambda: ui.notify(
+                            f"Attachment rejected (limit {_fmt_size(max_upload_bytes)})",
+                            type="warning",
+                        ),
+                    ).props("flat dense square").classes("chat-uploader").mark("chat-upload")
                     message_input = (
                         ui.input(placeholder="Message Hermes…")
                         .props("outlined dense autofocus")
@@ -810,10 +1133,27 @@ def register_pages(plugin: Plugin) -> None:
                         .on("keydown.enter", lambda: _run_in_client(send))
                         .mark("chat-input")
                     )
-                    send_button = (
-                        ui.button(icon="send", on_click=lambda: _run_in_client(send))
+                    stop_button = (
+                        ui.button(icon="stop", color="negative", on_click=_stop)
                         .props("round dense")
-                        .mark("chat-send")
+                        .mark("chat-stop")
                     )
+                    stop_button.set_visibility(False)
+                    ui.button(icon="send", on_click=lambda: _run_in_client(send)).props(
+                        "round dense"
+                    ).mark("chat-send")
 
+            async def _refresh_session_state() -> None:
+                """Poll: keep the running indicator + header stats live while the agent
+                works in this session from any surface, not just turns started here."""
+                nonlocal session
+                try:
+                    fresh = await store.sessions.get_session(session_id)
+                except HermesError:
+                    return
+                session = fresh
+                _update_running_indicator(is_running(session), session.last_activity_description)
+                stats_label.set_text(_stats_text())
+
+            ui.timer(5.0, lambda: _run_in_client(_refresh_session_state))
             logger.debug("session detail rendered for {}", session_id)
