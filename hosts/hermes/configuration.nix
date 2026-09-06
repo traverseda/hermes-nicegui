@@ -91,29 +91,9 @@
     healthCheckUrls = [ "https://hermes.0u0.ca/" ];
   };
 
-  # ── opencode global config ─────────────────────────────────────────
-  # opencode's default model on the OpenCode Go gateway is gpt-5.6-luna, so
-  # without a global pin every run OUTSIDE the flake repo (kanban worktrees,
-  # /tmp, other dirs) falls back to Luna while hermes itself runs
-  # quanttrio/Qwen3.6-35B-A3B-AWQ. The repo-level opencode.json only covers
-  # runs inside this repo; this installs the pin into
-  # ~/.config/opencode/opencode.jsonc on every activation so it applies
-  # everywhere and survives re-provisioning.
-  # The same file also loads the @vectorize-io/opencode-hindsight plugin
-  # globally (api http://127.0.0.1:8888, bank "code"), so EVERY opencode
-  # session — repo, worktree, /tmp — retains/recalls against the local
-  # Hindsight service. Auth token comes from HINDSIGHT_API_TOKEN in
-  # hermes-env (see the memory block above), inherited via the gateway env.
-  # Keep the model id in sync with the hermesDeploy.model default
-  # (vllm / quanttrio/Qwen3.6-35B-A3B-AWQ).
-  system.activationScripts.opencode-global-config = {
-    deps = [ "users" ];
-    text = ''
-      install -D -m 0660 -o hermes -g hermes \
-        ${./opencode-global.jsonc} \
-        /var/lib/hermes/.config/opencode/opencode.jsonc
-    '';
-  };
+  # ── Opencode handled by modules/opencode.nix ─────────────────────
+  # The opencode module manages the binary and generates its global config
+  # from hermesDeploy.llm. The old activation script above is removed.
 
   # Content-store fast path: agent-authored skills/tools/MCP servers live in a
   # git-backed store (recovered by `hermes-tool revert`) instead of a Nix
