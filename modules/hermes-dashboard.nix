@@ -141,11 +141,20 @@ in
         Restart = "always";
         RestartSec = 5;
 
-        # Same hardening as the gateway unit: shared state is group-writable,
-        # no privilege escalation, no system writes outside stateDir.
+        # ── The bot is root — the dashboard lane must not veto it ────────
+        # hosts/hermes/configuration.nix gives hermes passwordless sudo for
+        # ALL commands ("bot is root"); kanban workers are spawned by this
+        # dashboard unit, so NoNewPrivileges here would kill sudo/setuid at
+        # the kernel level in every worker session. Relax both exactly like
+        # the gateway lane (hermes-service.nix) — the safety net is the
+        # rollback machinery, not a kernel sandbox. ProtectSystem=strict is
+        # NOT a usable middle ground: it per-mount-locks / ro in the unit
+        # namespace and even root inside the namespace cannot remount it rw
+        # (mount: permission denied, EPERM), so workers could never write
+        # the flake or run nixos-rebuild.
         UMask = "0007";
-        NoNewPrivileges = true;
-        ProtectSystem = "strict";
+        NoNewPrivileges = lib.mkForce false;
+        ProtectSystem = lib.mkForce false;
         ProtectHome = false;
         ReadWritePaths = [
           agent.stateDir
@@ -154,10 +163,16 @@ in
         PrivateTmp = true;
       };
 
+      # The base PATH only has the agent's extraPackages. Expose the setuid
+      # sudo wrapper (/run/wrappers/bin) and the system tools
+      # (/run/current-system/sw/bin) so kanban workers spawned from this
+      # unit can actually sudo — same as the gateway lane (hermes-service.nix).
       path = with pkgs; [
         bash
         coreutils
         git
+        "/run/wrappers"
+        "/run/current-system/sw"
       ];
     };
   };

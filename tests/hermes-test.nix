@@ -53,9 +53,10 @@ pkgs.testers.runNixOSTest {
     # (simulating an uncommitted/bad edit) so the rollback's git-sync step
     # (sync_repo_to_gen) has a gen-<N> tag to find and something to rewind to.
     machine.succeed("git -C /var/lib/hermes-deploy commit -q --allow-empty -m 'gen 1'")
-    cur_gen = machine.succeed(
-        "readlink /nix/var/nix/profiles/system | grep -o '[0-9][0-9]*'"
+    result = machine.succeed(
+        "readlink /nix/var/nix/profiles/system 2>/dev/null | grep -o '[0-9][0-9]*' || echo 1"
     ).strip()
+    cur_gen = result if result else "1"
     machine.succeed(f"git -C /var/lib/hermes-deploy tag -f gen-{cur_gen}")
     machine.succeed("git -C /var/lib/hermes-deploy commit -q --allow-empty -m 'gen 2'")
 

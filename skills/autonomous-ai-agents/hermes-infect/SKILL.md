@@ -141,7 +141,7 @@ posture (independent, BYOK); the operator's own LXC runs them all.
 | Core agent | `services.hermes-agent.enable` | The hermes gateway + CLI | ON | `hermes-env` (friend's provider keys) |
 | Vendored skills | (auto, via `hermes-skills.nix`) | Curated skills in the store | ON | none |
 | Self-deploy/rollback | `services.hermes-deploy.enable` | Git-driven switch + auto-rollback watchdog | ON | git remote access on the machine |
-| Preferred model | `hermesDeploy.llm.*` | opencode-go / deepseek-v4-flash defaults (ships in code) | ON | LLM key lives in the service's env file |
+| Preferred model | `hermesDeploy.llm.*` | opencode-go / mimo-v2.5 defaults (ships in code) | ON | LLM key lives in the service's env file |
 | Hindsight memory | `services.hindsight.enable` | Local retain/recall memory (podman) | ON | `hindsight-env` (friend's LLM + tenant key) |
 | Web dashboard | `services.hermes-dashboard.enable` | Admin panel (tailnet-only, basic auth) | Optional | `dashboard-env` (friend's creds) |
 | Tailscale | `services.tailscale.enable` | Tailnet membership | ON — friend's OWN tailnet | `tailscale-auth` (friend's pre-auth key) |

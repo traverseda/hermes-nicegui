@@ -29,6 +29,7 @@ during initial creation** (see below) — otherwise agenix can't decrypt.
 | File                     | Decrypts to           | Used by                             |
 | ------------------------ | --------------------- | ----------------------------------- |
 | `hermes-env.age`         | `/run/agenix/hermes-env` | Hermes `.env` (API keys, tokens)  |
+| `hass-env.age`           | `/run/agenix/hass-env` | default + ha profile `.env` (HASS_URL / HASS_TOKEN for the Home Assistant platform) |
 | `tailscale-auth.age`     | `/run/agenix/tailscale-auth` | `services.tailscale.authKeyFile` |
 | `hindsight-env.age`      | `/run/agenix/hindsight-env` | Hindsight container env file   |
 | `api-server-env.age`     | `/run/agenix/api-server-env` | default profile `.env` (API_SERVER_KEY for the multiplexed api_server) |
@@ -45,7 +46,20 @@ HINDSIGHT_API_KEY=<same value as HINDSIGHT_API_TENANT_API_KEY below>
 OPENCODE_API_KEY=<opencode-go API key>
 TAVILY_API_KEY=<tavily API key>
 OPENROUTER_API_KEY=<openrouter API key>
+AGENTMAIL_API_KEY=<agentmail API key>
+TAILSCALE_CLIENT_ID=<tailscale OAuth client id>
+TAILSCALE_CLIENT_SECRET=<tailscale OAuth client secret>
+OPENCODE_GO_API_KEY=<opencode-go API key>
+DISCORD_BOT_TOKEN=<discord bot token, migrated 2026-08-15 from the deprecated hermes bot at hermes@hermesagent.lan>
+DISCORD_ALLOWED_USERS=<comma-separated discord user ids allowed to talk to the bot>
+DISCORD_HOME_CHANNEL=<discord channel id used for gateway lifecycle notifications>
 ```
+
+The three `DISCORD_*` vars power the gateway's `discord` platform (enabled
+declaratively in `hosts/hermes/configuration.nix`). They were migrated from
+the deprecated bot's `~/.hermes/.env` on hermes@hermesagent.lan; the old
+box's copies are commented out there. To rotate: mint a new token in the
+Discord Developer Portal, then re-encrypt this secret (see Rotating below).
 
 `HINDSIGHT_API_KEY` is what the Hermes memory provider sends to the **local**
 Hindsight API as `Authorization: Bearer` — keep it identical to the
@@ -53,6 +67,20 @@ Hindsight API as `Authorization: Bearer` — keep it identical to the
 the token). The URL Hermes uses is declarative, in
 `hosts/hermes/configuration.nix` (`HINDSIGHT_API_URL=http://127.0.0.1:8888`),
 *not* the old remote `https://hindsight-api.0u0.ca`.
+
+`hass-env` is a plain `KEY=value` file:
+
+```
+HASS_URL=https://hearth.0u0.ca/
+HASS_TOKEN=<Home Assistant long-lived access token>
+```
+
+It is appended to the default profile's `.env` via
+`services.hermes-agent.environmentFiles` (the gateway's `homeassistant`
+platform reads it there) and flows into the `ha` profile's `.env` through the
+hermes-ha module's shared environment files. To rotate: mint a new token in
+Home Assistant (profile → security → long-lived access tokens), then
+`agenix -e secrets/hass-env.age && agenix --rekey -e secrets/hass-env.age`.
 
 `api-server-env` is a plain `KEY=value` file:
 
@@ -94,11 +122,14 @@ agenix --rekey -e secrets/dashboard-env.age
 HINDSIGHT_API_LLM_API_KEY=<key for the preferred model endpoint (opencode-go)>
 HINDSIGHT_API_TENANT_API_KEY=<shared key clients send as `Authorization: Bearer`>
 HINDSIGHT_CP_ACCESS_KEY=<optional; control-plane login, only if the dashboard is enabled>
+HINDSIGHT_CP_DATAPLANE_API_KEY=<same value as HINDSIGHT_API_TENANT_API_KEY; the control plane uses this to authenticate against the data-plane API. Must be set or the dashboard's bank fetch 401s and logs you out>
 ```
+
+The `HINDSIGHT_CP_DATAPLANE_API_KEY` must be identical to `HINDSIGHT_API_TENANT_API_KEY` — the control plane validates your login key against `HINDSIGHT_CP_ACCESS_KEY`, but proxies data-plane requests using `HINDSIGHT_CP_DATAPLANE_API_KEY`, and the API only accepts the tenant key. Missing it yields "Failed to fetch banks / Authentication failed: Invalid API key" immediately after a successful login.
 
 The LLM *endpoint* and *model* are not secrets — they live in Nix as
 `hermesDeploy.llm` (default: opencode-go `https://opencode.ai/zen/go/v1` with
-`deepseek-v4-flash`). Only the key lives here.
+`mimo-v2.5`). Only the key lives here.
 
 `tailscale-auth.age` is **not managed in Nix** — the pre-auth key comes from
 the Tailscale admin console and is left to the operator to fill in by hand

@@ -6,8 +6,10 @@
 #                 (picked up next session, no restart)
 #   * bin/      — agent-authored executables, appended to the gateway PATH
 #                 (available next turn, no restart)
-#   * config.yaml — git-tracked snapshot of the live config, so a bad edit
-#                 or bad `hermes mcp add` is revertible
+#   * config.yaml — git-tracked SNAPSHOT of the live config, refreshed by
+#                 commit/mark-good (and the periodic auto-commit). It is
+#                 restored to the live path ONLY by an explicit operator
+#                 `hermes-tool revert --config` — never automatically.
 #
 # SAFETY (the point of this tool):
 #   * This binary lives in /nix/store — immutable. It depends on NOTHING the
@@ -15,9 +17,14 @@
 #     still runs.
 #   * Every mutation auto-commits to the git-backed content store, so there is
 #     always a rollback point.
-#   * `hermes-tool revert` restores the last-known-good state (git tag
-#     content-good) and restarts the gateway. The operator runs it as root;
-#     the agent can run it too (falls back to `hermes gateway restart`).
+#   * `hermes-tool revert` restores the last-known-good CONTENT state (git
+#     tag content-good) and restarts the gateway. The live config.yaml is
+#     NEVER touched by automatic recovery — restoring it requires an explicit
+#     operator-invoked `hermes-tool revert --config`. This is deliberate: the
+#     watchdog runs `revert` on any health failure, and it must not clobber
+#     operator edits to config.yaml with a stale snapshot (R4 t_89f84f69).
+#     The operator runs it as root; the agent can run it too (falls back to
+#     `hermes gateway restart`).
 #
 # Placeholders (@contentDir@ etc.) are substituted at build time by the NixOS
 # module (pkgs.substituteAll).
@@ -52,6 +59,13 @@ commit_all() {
 }
 
 restart_gateway() {
+  # Testability guard (R4 t_89f84f69 Part C): fixture tests exercise this REAL
+  # script without a live gateway. If HERMES_TOOL_NO_RESTART=1 is set in the
+  # environment, skip all hermes/systemctl interaction entirely.
+  if [ "${HERMES_TOOL_NO_RESTART:-0}" = "1" ]; then
+    say "gateway restart skipped (HERMES_TOOL_NO_RESTART)"
+    return 0
+  fi
   # Prefer hermes' own in-place restart (works as the hermes user via RPC);
   # fall back to systemctl (works when run as root, e.g. by the watchdog).
   if command -v hermes >/dev/null 2>&1; then
@@ -100,12 +114,26 @@ cmd_mark_good() {
 
 cmd_revert() {
   require_repo
+  # Content-only by default: the watchdog auto-recovery path calls plain
+  # `revert`, which must NEVER restore config.yaml over deliberate operator
+  # edits. Restoring the live config is an explicit operator action only.
+  restore_config_flag=0
+  for arg in "$@"; do
+    case "$arg" in
+      --config) restore_config_flag=1 ;;
+      *) die "unknown revert option: $arg (usage: hermes-tool revert [--config])" ;;
+    esac
+  done
   if ! git_ rev-parse --verify -q "$GOOD_TAG" >/dev/null 2>&1; then
     die "no $GOOD_TAG tag — nothing to restore to"
   fi
   say "reverting content to $GOOD_TAG"
   git_ reset --hard "$GOOD_TAG"
-  restore_config
+  if [ "$restore_config_flag" = 1 ]; then
+    restore_config
+  else
+    say "live config.yaml left untouched (explicit 'revert --config' restores it)"
+  fi
   restart_gateway
   say "revert complete"
 }
@@ -190,7 +218,10 @@ usage: hermes-tool <command> [args]
 status                    show store state, last-good commit, inventory
 commit [message]          snapshot skills/bin/config.yaml into git
 mark-good                 tag current state as content-good (after verifying it works)
-revert                    restore content to content-good + restart gateway
+revert                    restore the content STORE to content-good + restart gateway.
+                          The live config.yaml is NEVER touched (safe for watchdog use).
+revert --config           additionally restore live config.yaml from the store snapshot —
+                          EXPLICIT operator action only; never run automatically.
 skill new <name> [<cat>]  scaffold a new skill in the store
 tool add <src>            install an executable into the store's bin
 mcp add <name> <url>      register an MCP server (+ restart gateway)
@@ -206,7 +237,7 @@ case "$cmd" in
   status) cmd_status ;;
   commit) cmd_commit "$@" ;;
   mark-good) cmd_mark_good ;;
-  revert) cmd_revert ;;
+  revert) cmd_revert "$@" ;;
   skill) cmd_skill_new "$@" ;;
   tool) cmd_tool_add "$@" ;;
   mcp)

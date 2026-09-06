@@ -46,7 +46,7 @@
   services.cloudflare-tunnel.enable = false; # public exposure
 
   # ── Model preference (ships in code; only the key is a secret) ──────
-  # hermesDeploy.llm defaults to opencode-go / deepseek-v4-flash — leave as-is.
+  # hermesDeploy.llm defaults to opencode-go / mimo-v2.5 — leave as-is.
 
   # ── Disko disk layout (nixos-anywhere partitioning) ─────────────────
   # CHANGE device to the target's real disk.

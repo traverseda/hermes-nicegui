@@ -23,6 +23,24 @@ dispatcher, the kanban worker guidance is already injected; follow it.
 - You may spawn other profiles or split work with `kanban_create`/`kanban_link`
   only when the ticket's owner asked for decomposition.
 
+## Code work goes through OpenCode
+
+This deployment's hard rule (README, `hermes-tooling` skill): **all code
+writing is delegated to opencode — never hand-edit code.** You are the
+orchestrator and reviewer; opencode is the writer.
+
+- Any code change — a feature, bugfix, refactor, script, skill, or patch,
+  including edits to `vendor/hermes-nicegui` — is written by opencode:
+  `opencode run '...'` for one-shot tasks, an interactive opencode session for
+  iterative work. Load the `opencode` skill first for exact commands and
+  pitfalls (pty requirements, exit keys, auth).
+- You still own the outcome: review opencode's diff, run the tests, then
+  commit and deploy.
+- Hand-editing is reserved for plumbing that is not code: config values,
+  prompt text, kanban metadata, ticket bodies, one-line shell commands.
+- If opencode is unavailable (no auth, missing binary), say so in the ticket
+  and block with `kanban_block(kind="capability", ...)` rather than hand-coding.
+
 ## File a ticket when you need something done
 
 Anytime you (or a request aimed at you) needs work outside your lane, open a

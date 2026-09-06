@@ -17,10 +17,12 @@
 # auto-rollback watchdog on the target). Optionally snapshots the CT first.
 #
 # Usage:
-#   scripts/deploy.sh [--host hermes@<ip>] [--snapshot] [--no-check]
+#   scripts/deploy.sh [--host hermes@<ip>] [--snapshot] [--no-check] \
+#     [--force-memory-gate]
 #
 # Env:
 #   HERMES_HOST   ssh target (default: hermes@hermes.tailnet  / $HERMES_TAILSCALE_IP)
+#   MEMORY_GATE_FLOOR_MB  target memory-gate floor in MB (default: 2048)
 set -euo pipefail
 
 # Reach the box over the LAN (hermes.lan). The tailnet IP is NOT usable for
@@ -32,12 +34,14 @@ set -euo pipefail
 HOST="${HERMES_HOST:-root@${HERMES_TAILSCALE_IP:-hermes.lan}}"
 SNAPSHOT=false
 CHECK=true
+FORCE_GATE=false
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --host) HOST="$2"; shift 2 ;;
     --snapshot) SNAPSHOT=true; shift ;;
     --no-check) CHECK=false; shift ;;
+    --force-memory-gate) FORCE_GATE=true; shift ;;
     *) echo "unknown option: $1" >&2; exit 1 ;;
   esac
 done
@@ -66,18 +70,8 @@ echo "== syncing flake repo to $HOST:/var/lib/hermes-deploy (no remote; rsync is
 # hermes-deploy.service / hermes-rollback.service operate on the same source
 # that this deploy activated. Exclusions:
 #   .git           the LXC keeps its own local ledger (bot commits / rollbacks)
-#   vendor/        vendor/* submodules are excluded so a routine deploy from
-#                  this machine never clobbers box-side commits the bot made
-#                  directly on the LXC (its own vendor/hermes-agent edits,
-#                  its own flake.lock bump) with this machine's possibly-older
-#                  copy. This machine's `nixos-rebuild switch --target-host`
-#                  above still builds from ITS OWN vendor/* + flake.lock —
-#                  this exclusion only protects the box's local ledger copy
-#                  used by hermes-deploy.service for the bot's own deploys.
-#                  If you edited vendor/* on THIS machine and want it synced,
-#                  drop this exclude for one run.
-#   state/         deploy bookkeeping (last-known-good, gen-<N> tags live in
-#                  the ledger's refs, not here) lives here
+#   vendor/        editable submodules on the LXC must survive (their own repos)
+#   state/         deploy bookkeeping (last-known-good) lives here
 #   result*, *.qcow2  build artifacts
 #   secrets/lxc-host-ed25519  the LXC's own host key (gitignored; never re-copy)
 rsync -a --delete \
@@ -91,6 +85,28 @@ rsync -a --delete \
   --exclude '*.img' \
   --exclude '/secrets/lxc-host-ed25519' \
   ./ "$HOST:/var/lib/hermes-deploy/"
+
+# R2 (ticket t_68443fdf): TARGET-side memory gate. The 2026-08-26 wedge
+# (load 9.37, host bounced) happened on the LXC — the switch TARGET — not on
+# this build machine, so measure the box's MemAvailable+SwapFree headroom
+# before asking it to activate a new generation. Same floor and exit code as
+# the on-box gate in modules/hermes-deploy.nix.
+if [ "$FORCE_GATE" = true ]; then
+  echo "WARNING: skipping target memory gate (--force-memory-gate)"
+else
+  echo "== memory gate on $HOST =="
+  # Sum MemAvailable + SwapFree remotely; awk keeps it portable (no bc).
+  # `|| true` lets an unreachable box fall through to the :-0 guard below
+  # instead of dying with ssh's exit code.
+  TARGET_MB=$(ssh "$HOST" "awk '/^MemAvailable:/ { printf \"%d\", \$2/1024; f=1 } END { if (!f) print 0 }' /proc/meminfo; awk '/^SwapFree:/ { printf \"%d\", \$2/1024 }' /proc/meminfo" | awk '{s+=$1} END {print s}') || true
+  GATE_FLOOR="${MEMORY_GATE_FLOOR_MB:-2048}"
+  if [ "${TARGET_MB:-0}" -lt "$GATE_FLOOR" ]; then
+    echo "ABORT: target headroom ${TARGET_MB:-0}MB < ${GATE_FLOOR}MB (rebuild wedge risk, see t_68443fdf)"
+    echo "Retry when quiet, or bypass: $0 --force-memory-gate ..."
+    exit 42
+  fi
+  echo "target headroom: ${TARGET_MB:-0}MB - OK"
+fi
 
 echo "== building & switching on $HOST =="
 nixos-rebuild switch \

@@ -134,6 +134,8 @@ scripts/rollback.sh              # step back one generation
 scripts/hermes-tool.sh           # content-store CLI source (built by hermes-tools.nix)
 scripts/test.sh                  # nix flake check / local VM / integration test
 scripts/import-proxmox.sh        # build & import the LXC image into Proxmox
+scripts/patch-hermes.sh          # rebuild the hermes-agent fork w/ local patches
+patches/                         # local hermes source patches (see patches/README.md)
 secrets/                         # agenix encrypted secrets (see secrets/README.md)
 ```
 
@@ -207,12 +209,49 @@ Without that snippet the box-side git phases silently no-op and rollback is a
 lie — this has shipped broken before, which is why `hermes-config-check`
 asserts the snippet exists.
 
+#### Memory gate & build caps (R2, 2026-08)
+
+Since the 2026-08-26 incident (an uncapped rebuild wedged the 7.8GB-RAM LXC,
+load 9.37), every switch path is gated and capped:
+
+- **Headroom formula:** `MemAvailable + SwapFree` from `/proc/meminfo`.
+- **Floor: 2048 MB** (`services.hermes-deploy.minAvailableMemMb`) — a serial
+  rebuild + evaluation needs ~1–2 GB beside the resident stack (the Hindsight
+  cross-encoder alone holds ~2.1 GB). SwapFree counts because the kernel
+  reclaims cache and swaps before OOM.
+- **A gated deploy touches nothing — but how you see the verdict depends on
+  the entry point.** The gate itself exits 42 before any side effect.
+  `hermes-deploy --check-memory-gate` is the synchronous verdict (exit 0 =
+  green, failure = gated), and `scripts/deploy.sh` aborts with 42 before
+  switching (floor via `MEMORY_GATE_FLOOR_MB`, bypass via
+  `--force-memory-gate`). Through the normal `hermes-deploy` CLI the
+  launcher detaches and returns 0: a gated run is visible in
+  `journalctl -u hermes-deploy-run` and the deploy simply does not happen.
+  Bypass once for genuine emergencies with `hermes-deploy --force-memory-gate`.
+- **Caps:** every switch/build transient runs under `MemoryMax=3G`
+  (`switchMemoryMax`) with `--max-jobs 1 --cores 2` (`maxJobs` / `cores`).
+  MemoryMax bounds evaluation and the switch steps; when builds route
+  through nix-daemon, the build workers run in `nix-daemon.service`, outside
+  the transient cgroup — `--max-jobs 1` is the binding anti-wedge control in
+  all cases. Switch transients are named (`hermes-deploy-switch`,
+  `hermes-*-run`), which also makes concurrent deploys fail loudly instead
+  of interleaving.
+- **Blocking switches:** systemd-run only waits for a transient when given
+  `--wait` (without it, it returns as soon as the service forks). All three
+  switch transients carry it, and the deploy switch propagates
+  nixos-rebuild's real exit status — so a switch that dies mid-flight is
+  reported as FAILED and healed by the safety net + health check +
+  auto-rollback, never blessed as "deploy OK".
+- **Rollback verdict:** `hermes-rollback` waits for the detached rollback
+  transient and now exits nonzero if that transient FAILED (inspect it with
+  `journalctl -u hermes-rollback-run`).
+- **No swap inside the LXC** — the knob is host-side:
+  `pct set <ctid> --swap <MB>` on the Proxmox host, then reboot the CT.
+
 ## Making changes
 
 Edit the flake, commit, and deploy. That's the whole loop — and it's the same
-loop whether the change comes from a human or from the bot. See
-[MERGE_CRITERIA.md](MERGE_CRITERIA.md) for the test a change should pass
-before it lands:
+loop whether the change comes from a human or from the bot:
 
 ```sh
 git add -A && git commit -m "hermes: add skill for <thing>"
@@ -262,6 +301,30 @@ is undone exactly as reliably as a bad Nix config change. The submodule commit
 that introduced the bug isn't deleted — it stays in that submodule's own
 history — it's just no longer checked out or built.
 
+## Patching Hermes
+
+Local source patches to hermes-agent's own code (core fixes *or* additive
+features) ship through a **fork**: the patch *content* lives in `patches/`
+(this repo, rollback-safe), and `scripts/patch-hermes.sh` applies it onto the
+pinned upstream rev (`patches/upstream.lock`), pushes the fork's `patched`
+branch, points `flake.nix` at the fork, and re-locks. See `patches/README.md`.
+
+```sh
+# produce a diff against the pinned rev, save as patches/00-my-fix.patch
+HERMES_FORK=github:you/hermes-agent \
+HERMES_FORK_REMOTE=git@github.com:you/hermes-agent.git \
+  scripts/patch-hermes.sh --dry-run      # verify without pushing
+HERMES_FORK=github:you/hermes-agent \
+HERMES_FORK_REMOTE=git@github.com:you/hermes-agent.git \
+  scripts/patch-hermes.sh --build        # push fork, relock, verify build
+git add patches/ flake.nix flake.lock && git commit -m "hermes: apply local patch"
+scripts/deploy.sh
+```
+
+Rollback: `git revert` the commit that bumped `flake.nix`/`flake.lock`, then
+`scripts/deploy.sh`. Drop a patch: delete its `.patch` and re-run
+`patch-hermes.sh`. Update upstream: `patch-hermes.sh --update-upstream <rev>`.
+
 ## Notes
 
 - **Pin your inputs.** `hermes-agent`, `hermes-nicegui-src`, and
@@ -272,6 +335,53 @@ history — it's just no longer checked out or built.
 - **Secrets never go in Nix config.** Use agenix (`secrets/README.md`).
 - **`nix flake update`** bumps nixpkgs/agenix to latest locks — treat this as
   a normal deploy and let the watchdog validate it.
+
+## Calorie tracking (ported from hermes@hermesagent.lan, Aug 2026)
+
+The calorie/fitness tracking system (food log + fitness planner + weekly
+review) was ported from the old box during the migration. It lives at
+`skills/health/calorie-tracking/`:
+
+- `SKILL.md` — the agent-facing skill (food logging workflow, HA entities,
+  cron jobs, pitfalls).
+- `scripts/` — canonical copies of the runtime scripts: `food_log.py`,
+  `fitness_snapshot.py`, `fitness_planner.py`, `weekly_fitness_collect.py`
+  (legacy), `reset-food-today.sh`, plus `smoke_test.py` (read-only/DRY_RUN
+  checks).
+- `data/` — seeded `foods.json` (food library) and `food-log.jsonl`
+  (history, for lifetime-total continuity); `fitness_targets.json` is a
+  stale artifact archived for review and deliberately NOT installed;
+  `dashboard-fitness.json` is the HA dashboard config reference.
+- `REVIEW.md` — code-review notes from the port (bugs, drift, risks).
+
+Runtime copies are installed by `bash skills/health/calorie-tracking/install.sh`
+(→ `~/.hermes/scripts/`, `~/workspace/foodlog/`,
+`~/workspace/notes-and-research/fitness/`). The three cron jobs
+(`Food Log Reset`, `Fitness Planner Daily`, `Fitness Assistant Weekly`) are
+created at runtime with the cronjob tool (delivery targets pending chat
+channel wiring — see REVIEW.md). The hermes-skills module ships `python3`
+(the scripts are stdlib-only, but the skill's commands and cron need a
+python3 on the gateway PATH).
+
+## Legacy cron manager port (hermesagent.lan, Aug 2026)
+
+The old crontab manager was the cron subsystem of hermes-agent 0.20.0 running
+on hermesagent.lan — the same subsystem (newer) ships in this deployment, so
+the port migrated **state and dependencies**, not code:
+
+- `scripts/cron-port/` — the migration kit: `import-old-cron.py` (legacy
+  `jobs.json` → local store, idempotent, atomic, delivery remap, pause
+  preservation), `legacy-jobs-import.json` (the redacted+adapted migration
+  manifest), `redact-legacy-secrets.py` (secret scrubber), the ported
+  `cron-usage-summary.py`, unit tests, and a README with the full inventory +
+  per-job migration map.
+- `skills/media/` — the ported `arr-stack`, `tunarr`, `sonarr-add-show`
+  skills (redacted; credentials pointed at `~/.hermes/.env`).
+- Result: 10 old jobs → 3 already migrated by the calorie port, 2 imported
+  active (cronjob-self-review, Note organization), 4 imported paused (arr /
+  tunarr / sailboat — dependencies not provisioned here), 1 deliberately not
+  ported (stale host-specific one-shot). Resume instructions in
+  `scripts/cron-port/README.md`.
 
 ## Hindsight memory service
 
@@ -392,9 +502,37 @@ cron/chat all see the real agent state.
 - **Files is confined to the workspace.** `HERMES_FILES_ROOT` defaults to the
   agent's workspace (`/var/lib/hermes/workspace`); don't widen it past that,
   the app is public.
+- **Notes is a read-only xaelwiki browser.** The `xaelwiki` plugin adds a
+  "Notes" page that lists and searches the xaelwiki vault (`/xaelwiki`,
+  detail at `/xaelwiki/{note}`). It reads the vault's markdown files straight
+  from disk — no MCP server, no token, no writes — via
+  `HERMES_XAELWIKI_NOTES_DIR` (default `/var/lib/xaelwiki/notes`,
+  `services.hermes-nicegui.xaelwikiNotesDir`; the xaelwiki module puts the
+  hermes user in the `xaelwiki` group so it can read the 0750 vault dir).
+  Also configurable with `HERMES_XAELWIKI_REFRESH_SECONDS` (default 30).
 - **Runs as the hermes user**, colocated with the agent — same user/group,
   same `$HERMES_HOME`, so the CLI subprocess and direct state reads resolve
   exactly like the gateway's.
+
+## Editable agent source (browser-editable agent code)
+
+The agent itself runs from a LIVE source checkout the same way hermes-nicegui
+does: immutable Nix deps, editable source. `hermesDeploy.editableAgentSrc`
+points at the vendored submodule (`vendor/hermes-agent` inside the deploy
+repo), following the same pattern as hermes-nicegui and xaelwiki. The deployed
+package is a thin wrapper over the sealed package: the agent's Python code and
+bundled plugins resolve from the checkout, everything else (venv deps, skills,
+locales, web dist) comes from the store.
+
+- Edit: browse to the Files page → `hermes-deploy/vendor/hermes-agent` →
+  edit + save.
+- Apply: `systemctl restart hermes-agent` (or `sudo systemctl restart
+  hermes-agent` from the browser terminal). No rebuild.
+- Roll back an edit: `git -C /var/lib/hermes-deploy/vendor/hermes-agent
+  checkout -- .` (plus `git clean -fd` to scrub bytecode caches).
+- Risk: a broken edit crash-loops the gateway until reverted — the deploy
+  watchdog covers deploys, git covers checkout edits. Disable by setting
+  `hermesDeploy.editableAgentSrc = null;` and redeploying.
 
 ## Tailnet exposure registry (no credentials, no deploy)
 

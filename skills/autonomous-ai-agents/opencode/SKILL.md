@@ -196,6 +196,26 @@ terminal(command="opencode stats --days 7 --models anthropic/claude-sonnet-4")
 - Avoid sharing one working directory across parallel OpenCode sessions.
 - Enter may need to be pressed twice to submit in the TUI (once to finalize text, once to send).
 
+### Headless `opencode run` one-shots (kanban/deploy agents)
+
+- **`--auto` is required for runs that must actually write files or run commands.**
+  Without it, a `run` in a non-interactive shell can silently no-op: the model reads
+  context files, hits an approval gate, and the process exits 0 with no edits and no
+  report. Always pass `--auto` for trusted repos (it auto-approves permissions).
+- **Prompt quoting breaks on apostrophes.** `opencode run '...'` with a prompt
+  containing `'` (e.g. "the spec's tests") terminates the shell string early and
+  fails with `bash: syntax error`. Write the prompt to a file and expand it:
+  `opencode run "$(cat /tmp/prompt.txt)" -f /tmp/spec.md`. Same for the spec: attach
+  with `-f` rather than inlining.
+- Run long refactors in the background and watch with `process(action="wait"|"log")`;
+  `notify_on_complete` may be unavailable in one-shot runner sessions.
+- **NixOS stub-ld**: `uv run ruff` / `uv run pyright` die with the dynamic-binary
+  stub error. Workarounds: a Nix-patched `ruff` binary (opencode can fetch one to
+  `/tmp/opencode/bin/ruff`), and pyright via
+  `PATH=<store-nodejs>/bin:$PATH PYRIGHT_PYTHON_NODEJS_WHEEL=false uv run pyright`.
+- Prove pyright net-zero regressions by diffing the error list against a stashed
+  baseline: `git stash -q && pyright > before.txt && git stash pop -q && pyright > after.txt && comm -13 before after`.
+
 ## Verification
 
 Smoke test:

@@ -61,7 +61,10 @@ pkgs.runCommand "dashboard-config-check"
     ${need "Wants=hermes-agent.service" "dashboard.unit"}
     ${need "WantedBy=multi-user.target" "dashboard.unit"}
     ${need "NoNewPrivileges" "dashboard.unit"}
-    ${need "ProtectSystem=strict" "dashboard.unit"}
+    # Bot is root: ProtectSystem relaxed (module uses mkForce false) so
+    # the bot's root access actually works; safety net is rollback, not
+    # kernel sandbox.
+    ${need "ProtectSystem=false" "dashboard.unit"}
     ${need "User=hermes" "dashboard.unit"}
     ${need "Group=hermes" "dashboard.unit"}
 

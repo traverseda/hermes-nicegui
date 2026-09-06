@@ -20,3 +20,7 @@ secrets/lxc-host-ed25519
 .vscode/
 .idea/
 *.swp
+
+# Python bytecode from local smoke runs
+__pycache__/
+*.pyc

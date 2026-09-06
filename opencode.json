@@ -5,7 +5,9 @@
       "@vectorize-io/opencode-hindsight",
       {
         "hindsightApiUrl": "http://hermesagent.lan:8888",
-        "bankId": "code"
+        "bankId": "code",
+        "retainTags": ["project:{gitProject}", "env:work"],
+        "retainMetadata": { "repo": "{gitProject}" }
       }
     ]
   ]

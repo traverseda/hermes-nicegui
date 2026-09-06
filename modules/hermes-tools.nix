@@ -18,10 +18,15 @@
 #     the rollback ledger for content, exactly as Nix generations are the
 #     ledger for the system.
 #   * Recovery is a store binary. `hermes-tool revert` (from /nix/store,
-#     immutable) restores the last-known-good git tag `content-good` AND the
-#     known-good config.yaml, then restarts the gateway. It depends on nothing
-#     the agent can touch, so even a fully broken content store is fixable —
+#     immutable) resets the content store to the last-known-good git tag
+#     `content-good` and restarts the gateway. It depends on nothing the
+#     agent can touch, so even a fully broken content store is fixable —
 #     the agent cannot brick itself in a way it cannot fix.
+#   * The live config.yaml is NEVER touched by automatic recovery. A snapshot
+#     of it lives in the store for an EXPLICIT operator revert
+#     (`hermes-tool revert --config`); the watchdog path (plain
+#     `hermes-tool revert`, services.hermes-deploy.contentRecovery) never
+#     restores it, so operator edits survive health-check failures.
 #   * The deploy watchdog runs `hermes-tool revert` as a cheap FIRST recovery
 #     attempt BEFORE falling back to a Nix generation rollback (see
 #     services.hermes-deploy.contentRecovery). Content failures are reverted
@@ -38,7 +43,10 @@
 # Safety invariants (why it can't brick itself):
 #   1. hermes-tool is in /nix/store — immutable, always present, always works.
 #   2. Every mutation auto-commits — git is the content rollback ledger.
-#   3. content-good tag + config.yaml snapshot = a mechanical "last known good".
+#   3. content-good tag = mechanical last known good for CONTENT. The
+#      config.yaml snapshot in the store exists for EXPLICIT operator revert
+#      (`hermes-tool revert --config`) — automatic recovery (watchdog) never
+#      touches the live config.
 #   4. The watchdog tries content-revert before generation-rollback, and
 #      generation-rollback (hermes-rollback) remains the ultimate floor.
 #   5. Local skills shadow external_dirs on collision, but the Nix vendored
@@ -164,6 +172,15 @@ in
       };
       script = ''
         if [ -d ${contentDir}/.git ]; then
+          # Refresh the config.yaml snapshot BEFORE committing. Automatic
+          # recovery no longer restores config.yaml (only an explicit
+          # operator `hermes-tool revert --config` does), so the snapshot is
+          # only as good as its last refresh — this keeps it at most
+          # ${cfg.autoCommitInterval} stale and actually useful for a
+          # deliberate operator restore.
+          if [ -f ${hermesHome}/config.yaml ]; then
+            cp ${hermesHome}/config.yaml ${contentDir}/config.yaml
+          fi
           git -C ${contentDir} add -A
           if ! git -C ${contentDir} diff --cached --quiet; then
             ${gitIdentity}

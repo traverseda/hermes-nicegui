@@ -39,10 +39,13 @@ in
     services.hermes-agent.settings.skills.external_dirs = [ "${vendoredSkills}" ];
 
     # Tools the vendored skills call. opencode = the opencode skill, tmux =
-    # the hermes-agent self-management skill. Keep this intentional.
+    # the hermes-agent self-management skill, python3 = the calorie-tracking
+    # skill + its cron scripts (food_log.py, fitness_snapshot.py,
+    # fitness_planner.py — stdlib-only). Keep this intentional.
     services.hermes-agent.extraPackages = with pkgs; [
       opencode
       tmux
+      python3
     ];
 
     # Stop hermes from seeding its bundled skills into $HERMES_HOME/skills.
