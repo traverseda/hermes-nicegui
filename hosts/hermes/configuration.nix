@@ -89,7 +89,6 @@
     # 530'd for ~20min while the gateway itself stayed healthy the whole
     # time. See modules/cloudflare-tunnel.nix / hermes-nicegui.nix for the
     # same hostname.
-    healthCheckUrls = [ "https://hermes.0u0.ca/" ];
   };
 
   # ── Opencode handled by modules/opencode.nix ─────────────────────

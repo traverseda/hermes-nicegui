@@ -115,7 +115,7 @@ pkgs.runCommand "hindsight-config-check"
     ${need "hindsight-code-bank-config" "oneshot.unit"}
     ${need "After=podman-hindsight.service" "oneshot.unit"}
     ${need "Wants=podman-hindsight.service" "oneshot.unit"}
-    ${need "WantedBy=multi-user.target" "oneshot.unit"}
+    ${mustNot "WantedBy=multi-user.target" "oneshot.unit"}
     ${need "EnvironmentFile=/dummy/env" "oneshot.unit"}
     ${need "Type=oneshot" "oneshot.unit"}
 
