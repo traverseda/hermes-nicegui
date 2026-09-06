@@ -19,7 +19,7 @@
 {
   imports = [
     (modulesPath + "/virtualisation/proxmox-lxc.nix")
-    ./../modules/opencode.nix
+    ../../modules/opencode.nix
   ];
 
   proxmoxLXC = {
