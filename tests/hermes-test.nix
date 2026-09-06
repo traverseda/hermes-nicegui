@@ -53,10 +53,10 @@ pkgs.testers.runNixOSTest {
     # (simulating an uncommitted/bad edit) so the rollback's git-sync step
     # (sync_repo_to_gen) has a gen-<N> tag to find and something to rewind to.
     machine.succeed("git -C /var/lib/hermes-deploy commit -q --allow-empty -m 'gen 1'")
-    machine.succeed(
-        "CUR=$(readlink /nix/var/nix/profiles/system | grep -o '[0-9][0-9]*'); "
-        "git -C /var/lib/hermes-deploy tag -f gen-$CUR"
-    )
+    cur_gen = machine.succeed(
+        "readlink /nix/var/nix/profiles/system | grep -o '[0-9][0-9]*'"
+    ).strip()
+    machine.succeed(f"git -C /var/lib/hermes-deploy tag -f gen-{cur_gen}")
     machine.succeed("git -C /var/lib/hermes-deploy commit -q --allow-empty -m 'gen 2'")
 
     # The three deploy units must exist and be correctly wired.
@@ -77,16 +77,30 @@ pkgs.testers.runNixOSTest {
     # `nix-env --rollback` has nowhere to go) but the git-sync step must still
     # run and reset the flake checkout to whatever the gen-<N> tag records for
     # the (unchanged) current generation — assert that worked and no binary is
-    # missing.
+    # missing. hermes-rollback.service's ExecStart is now self-kill-hardened:
+    # it only LAUNCHES the detached hermes-rollback-run transient and returns
+    # immediately, so `systemctl start` returning is not "rollback finished" —
+    # wait for the transient itself to stop running before asserting on its
+    # side effects (this is exactly what the `hermes-rollback` CLI wrapper
+    # does).
     machine.succeed("systemctl start hermes-rollback.service || true")
+    machine.wait_until_succeeds(
+        "! systemctl is-active --quiet hermes-rollback-run.service", timeout=120
+    )
     machine.succeed("git -C /var/lib/hermes-deploy log --oneline -1 | grep -q 'gen 1'")
-    machine.succeed("! journalctl -u hermes-rollback.service --no-pager | grep -q 'command not found'")
+    machine.succeed("! journalctl -u hermes-rollback-run --no-pager | grep -q 'command not found'")
 
     # Manual deploy against a real local git repo (no remote): the git phase
     # must run and commit the working tree on top of the current HEAD. Touch a
     # file first so there is something to stage (the VM repoDir is empty).
+    # Same self-kill-hardened detachment as rollback above (hermes-deploy-run,
+    # --collect this time — it disappears once done, success or fail, which is
+    # exactly what "! is-active" below detects).
     machine.succeed("touch /var/lib/hermes-deploy/.deploy-seed")
     machine.succeed("systemctl start hermes-deploy.service || true")
+    machine.wait_until_succeeds(
+        "! systemctl is-active --quiet hermes-deploy-run.service", timeout=300
+    )
     machine.succeed("git -C /var/lib/hermes-deploy log --oneline -2 | grep -q 'deploy'")
 
     print("integration test passed")

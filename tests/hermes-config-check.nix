@@ -26,9 +26,15 @@ let
       ];
     }).config;
 
+  # deploy/rollback ExecStart is now `systemd-run --unit=... ... <script>`
+  # (self-kill hardening: the whole thing runs as a detached transient) —
+  # the actual script path is the last whitespace-separated token. watchdog
+  # stays a bare path (it runs in the foreground on purpose).
+  lastWord = s: lib.last (lib.splitString " " s);
+
   # Generated artifacts to assert on (store paths / small strings).
-  deployScript = cfg.systemd.services."hermes-deploy".serviceConfig.ExecStart;
-  rollbackScript = cfg.systemd.services."hermes-rollback".serviceConfig.ExecStart;
+  deployScript = lastWord cfg.systemd.services."hermes-deploy".serviceConfig.ExecStart;
+  rollbackScript = lastWord cfg.systemd.services."hermes-rollback".serviceConfig.ExecStart;
   watchdogScript = cfg.systemd.services."hermes-watchdog".serviceConfig.ExecStart;
   deployUnit = pkgs.writeText "hermes-deploy.unit" cfg.systemd.units."hermes-deploy.service".text;
   rollbackUnit =
@@ -114,7 +120,13 @@ pkgs.runCommand "hermes-config-check"
     ${need "ExecStart" "rollback.unit"}
     ${need "ExecStart" "watchdog.unit"}
     ${need "After=hermes-agent.service" "watchdog.unit"}
-    ${need "Requires=hermes-agent.service" "watchdog.unit"}
+    # Deliberately NOT `Requires=hermes-agent.service`: the watchdog exists
+    # precisely to roll back when the gateway is down. A hard Requires= means
+    # systemd refuses to even START the watchdog while its dependency has
+    # failed — disabling the one thing that's supposed to fix that. This was
+    # a latent bug in an earlier version of this module (asserted here as a
+    # MUST-HAVE); regression guard for it staying gone.
+    ${mustNot "Requires=hermes-agent.service" "watchdog.unit"}
     ${need "OnBootSec=10min" "watchdog.timer"}
     ${need "OnUnitActiveSec=1h" "watchdog.timer"}   # vm-configuration overrides
 

@@ -28,6 +28,26 @@
     manageHostName = false;
   };
 
+  # Bind-mount the deploy repo into the agent workspace so the nicegui Files
+  # tab (sandboxed to HERMES_FILES_ROOT=/var/lib/hermes/workspace) can
+  # browse/edit the flake and vendor code. Bind mounts are invisible to path
+  # resolution, so the files-plugin sandbox check passes while the Files tab
+  # shows the SAME live tree — no copy, no divergence, and the
+  # deploy/rollback/watchdog/rsync pipeline is untouched. Browser edits land
+  # as uncommitted changes in the repo (intended for vendor/ submodules, per
+  # "Editing vendored source" in the README — they still need a commit +
+  # nixos-rebuild to ship). Nothing about this mount technically restricts
+  # edits to vendor/ alone; the whole repoDir, including flake.nix and hosts/,
+  # is reachable this way. That's a deliberate tradeoff, not an oversight —
+  # the Files tab sits behind the nicegui app's own login either way, and the
+  # git ledger + generation rollback are what make any edit through it
+  # reversible, same as an edit made over ssh.
+  fileSystems."/var/lib/hermes/workspace/hermes-deploy" = {
+    device = "/var/lib/hermes-deploy";
+    fsType = "none";
+    options = [ "bind" ];
+  };
+
   # The hermes service itself lives in modules/hermes-service.nix (shared
   # with the test VM). Overrides that are LXC-specific:
   services.hermes-agent = {
@@ -52,6 +72,12 @@
     repoDir = "/var/lib/hermes-deploy";
     flakeAttr = "hermes";
     branch = "main";
+    # Probe the actual public hostname, not just the local gateway process —
+    # a generation once shipped with no cloudflared unit and the tunnel
+    # 530'd for ~20min while the gateway itself stayed healthy the whole
+    # time. See modules/cloudflare-tunnel.nix / hermes-nicegui.nix for the
+    # same hostname.
+    healthCheckUrls = [ "https://hermes.0u0.ca/" ];
   };
 
   # Content-store fast path: agent-authored skills/tools/MCP servers live in a

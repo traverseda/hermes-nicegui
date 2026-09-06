@@ -63,6 +63,24 @@ in
         # High-value state: back up HERMES_HOME before any update.
         updates.pre_update_backup = "full";
 
+        # ── Memory: hindsight only, built-in memory off ───────────────────
+        # hermes-agent's built-in memory (MEMORY.md/USER.md, the `memory`
+        # tool) is DISABLED in favour of the hindsight external memory
+        # provider (modules/hindsight.nix; selected via provider below).
+        # Disabling memory_enabled/user_profile_enabled drops the built-in
+        # memory block from every system prompt (~800 tokens/turn) and gates
+        # the background-review fork off memory writes; the hindsight
+        # provider is loaded independently of these flags, so it keeps
+        # working. Verified on a real generation: MemoryStore never loads
+        # (prompt-size delta: 0B for the memory block), and
+        # agent.disabled_toolsets drops the `memory` tool from every
+        # platform's tool catalog (subtracted last, overrides all platform
+        # defaults) — the memory store behind it is disabled above; hindsight
+        # provider tools are injected separately and are unaffected.
+        memory.memory_enabled = false;
+        memory.user_profile_enabled = false;
+        agent.disabled_toolsets = [ "memory" ];
+
         # ── Kanban ticketing ────────────────────────────────────────────
         # The default profile is the work executor for tickets filed by the
         # `ha` profile (and by itself). The dispatcher runs inside the gateway
