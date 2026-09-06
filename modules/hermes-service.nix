@@ -15,31 +15,15 @@
   config,
   pkgs,
   lib,
+  hermes-agent ? null,
   ...
 }:
 
 let
   cfg = config.services.hermes-agent;
+  llm = config.hermesDeploy.llm;
 in
 {
-  options.hermesDeploy = {
-    # Overridable model identifier. Kept as an option so the test VM can
-    # inject a fake provider instead of a real one.
-    model = lib.mkOption {
-      type = lib.types.str;
-      default = "deepseek-v4-flash";
-      description = "Default model identifier for Hermes.";
-    };
-
-    # Inference provider for the default model (hermes_cli.auth
-    # PROVIDER_REGISTRY id). Defaults to opencode-go, matching the operator's
-    # own assistant model; key lives in hermes-env as OPENCODE_GO_API_KEY.
-    provider = lib.mkOption {
-      type = lib.types.str;
-      default = "opencode-go";
-      description = "Inference provider id for the default model.";
-    };
-  };
 
   config = {
     services.hermes-agent = {
@@ -53,8 +37,13 @@ in
       # Declarative config, deep-merged into config.yaml. Values here win
       # over anything the agent writes, so a bot cannot lock itself out.
       settings = {
-        model.default = config.hermesDeploy.model;
-        model.provider = config.hermesDeploy.provider;
+        model.default = llm.model;
+        model.provider = llm.provider;
+
+        # Agent clock: IANA timezone for hermes_time (session timestamps,
+        # cron wall-clock anchoring). System TZ stays UTC; only the agent
+        # operates on Halifax local time (t_03379e5a).
+        timezone = "America/Halifax";
 
         # Native backend: commands run as the hermes user on the host.
         # The bot edits this flake and deploys, instead of mutating state.
@@ -63,22 +52,21 @@ in
         # High-value state: back up HERMES_HOME before any update.
         updates.pre_update_backup = "full";
 
-        # ── Memory: hindsight only, built-in memory off ───────────────────
-        # hermes-agent's built-in memory (MEMORY.md/USER.md, the `memory`
+        # Memory: built-in file-backed store (MEMORY.md/USER.md + `memory`
         # tool) is DISABLED in favour of the hindsight external memory
         # provider (modules/hindsight.nix; selected via provider below).
         # Disabling memory_enabled/user_profile_enabled drops the built-in
         # memory block from every system prompt (~800 tokens/turn) and gates
-        # the background-review fork off memory writes; the hindsight
-        # provider is loaded independently of these flags, so it keeps
-        # working. Verified on a real generation: MemoryStore never loads
-        # (prompt-size delta: 0B for the memory block), and
-        # agent.disabled_toolsets drops the `memory` tool from every
-        # platform's tool catalog (subtracted last, overrides all platform
-        # defaults) — the memory store behind it is disabled above; hindsight
-        # provider tools are injected separately and are unaffected.
+        # the background-review fork off memory writes; the hindsight provider
+        # is loaded independently of these flags, so it keeps working.
+        memory.provider = "hindsight";
         memory.memory_enabled = false;
         memory.user_profile_enabled = false;
+        # Drop the built-in `memory` tool from every session's tool catalog
+        # (agent.disabled_toolsets is the documented global-suppression knob,
+        # subtracted last so it overrides all platform defaults). The store
+        # behind it is disabled above; hindsight provider tools are injected
+        # separately and are unaffected.
         agent.disabled_toolsets = [ "memory" ];
 
         # ── Kanban ticketing ────────────────────────────────────────────
@@ -92,13 +80,41 @@ in
         kanban.dispatch_in_gateway = true;
         kanban.auto_decompose = false;
         kanban.auto_subscribe_on_create = true;
+        # One worker at a time: cap concurrent tasks per profile so a burst
+        # of tickets doesn't spawn a pile of parallel agents on this box.
+        # Dispatcher reads this at gateway startup (kanban_watchers.py).
+        kanban.max_in_progress_per_profile = 1;
         # Orchestrator toolset. `toolsets: [kanban]` is required for the
         # kanban tools' check_fn to pass in normal (non-worker) sessions —
         # the `all`/`*` wildcard deliberately does not enable kanban. The
         # api_server platform drops kanban from its default composite, so it
         # must be listed explicitly there too.
         toolsets = [ "kanban" ];
-        platform_toolsets.api_server = [ "hermes-api-server" "kanban" ];
+        platform_toolsets.api_server = [
+          "hermes-api-server"
+          "kanban"
+        ];
+
+        # ── Cost optimisation (ported from the old hermesagent.lan config,
+        # t_472fe33a). The old box's cost posture was sound in principle but
+        # its auto-compact was too aggressive for a ~1M-window model: it
+        # capped full compaction at 128K tokens (~12% of the window) and
+        # proactive-pruned stale tool outputs at 48K. Adapted here to the
+        # same principles with saner triggers:
+        #   - compression.threshold_tokens 262144: full compaction fires at
+        #     ~256K tokens (25% of the 1M window) — bounds per-turn re-send
+        #     cost without summarising away context the model can still use.
+        #   - compression.proactive_prune_tokens 131072: deterministic
+        #     no-LLM reclaim of old tool outputs on long sessions only, so
+        #     stale file/terminal dumps stop being re-sent verbatim every
+        #     turn (the old box's 48K trigger fired far too early).
+        #   - agent.max_turns 150: cap worst-case loop spend (v0.20.1
+        #     default is 500; the old box ran 150 and it was sufficient).
+        # Compression config is read directly from config.yaml by
+        # run_agent.py per session, so no gateway restart trigger is needed.
+        agent.max_turns = 150;
+        compression.threshold_tokens = 262144;
+        compression.proactive_prune_tokens = 131072;
       };
 
       # AgentMail MCP server — gives the agent its own inbox (send/receive
@@ -109,7 +125,10 @@ in
       # config.yaml → the world-readable nix store.
       mcpServers.agentmail = {
         command = "npx";
-        args = [ "-y" "agentmail-mcp" ];
+        args = [
+          "-y"
+          "agentmail-mcp"
+        ];
         env.AGENTMAIL_API_KEY = "\${env:AGENTMAIL_API_KEY}";
       };
 
@@ -135,6 +154,11 @@ in
         # the LXC host key (/etc/ssh/ssh_host_ed25519_key). The bot needs this
         # to fix its own secrets (e.g. the CHANGE-ME placeholder credentials).
         age
+        # uv: fast Python package/env manager — generally useful for
+        # debugging and testing (venv creation, ephemeral tool installs).
+        # The box's system python3 is PEP 668 (no pip), so uv is the
+        # agent's clean lane for throwaway python environments.
+        uv
       ];
     };
 
@@ -160,6 +184,25 @@ in
         NoNewPrivileges = lib.mkForce false;
         ProtectSystem = lib.mkForce false;
       };
+      # Restart the gateway when these markers change between generations.
+      # Bumped for the Discord token migration (t_c5b70744): the deploy that
+      # first activates the new settings/secret must restart the gateway so
+      # it loads the new config.yaml/.env (platform enablement is read at
+      # startup only). Leave the marker; bump it for any future change that
+      # must take effect on deploy.
+      restartTriggers = [
+        "discord-migration-2026-08-15"
+        "timezone-halifax-2026-08-15"
+        "selfkill-fix-verify-2026-08-15"
+        # opencode hindsight memory: HINDSIGHT_API_TOKEN added to hermes-env,
+        # HINDSIGHT_BANK_ID removed (was forcing opencode off the code bank);
+        # gateway must reload .env so opencode children authenticate.
+        "hindsight-opencode-memory-2026-08-16"
+        # Default model switch to quanttrio/Qwen3.6-35b-a3b-awq (R4 operator
+        # mandate t_89f84f69; hermesDeploy.model); gateway must reload
+        # config.yaml so new sessions start on the new model.
+        "default-model-Qwen3.6-35B-A3B-AWQ-2026-08-26"
+      ];
       # The module's PATH only has the agent's extraPackages. Expose the
       # setuid sudo wrapper (/run/wrappers/bin) and the system tools
       # (/run/current-system/sw/bin) so the bot can actually sudo.

@@ -86,9 +86,15 @@ let
 
   envFileContent = lib.concatStringsSep "\n" (lib.mapAttrsToList (k: v: "${k}=${v}") cfg.environment);
 
-  # Provider/secret env files shared into the profile — everything EXCEPT the
-  # api_server key file, which belongs only to the default profile's listener.
-  profileEnvFiles = lib.filter (f: f != cfg.apiServerKeyFile) agent.environmentFiles;
+  # Provider/secret env files shared into the profile — INCLUDING the
+  # api_server key file. The multiplexed api_server authenticates named
+  # profiles (/p/<profile>/...) against a profile-scoped API_SERVER_KEY
+  # resolved from the PROFILE's own .env and fails closed without one
+  # (gateway/platforms/api_server.py `_expected_api_key` — named profiles
+  # never inherit the listener owner's key). We therefore provision the
+  # same listener key (api-server-env) into the ha profile's .env; Home
+  # Assistant authenticates to :8444 with that single key.
+  profileEnvFiles = agent.environmentFiles;
 
   # The reverse proxy: python (with aiohttp) wrapping scripts/ha-profile-proxy.py.
   proxyPython = pkgs.python3.withPackages (ps: [ ps.aiohttp ]);
@@ -186,9 +192,10 @@ in
       }
     ];
 
-    # Same declarative defaults as the main agent, scoped to the ha profile.
+    # Same declarative defaults as the main agent, reused from
+    # hermesDeploy.llm so one flag changes the model for all services.
     services.hermes-ha.settings = {
-      model.default = config.hermesDeploy.model;
+      model.default = config.hermesDeploy.llm.model;
       terminal.backend = "local";
       # The ha profile shares the default listener — never bind its own port.
       platforms.api_server.enabled = false;

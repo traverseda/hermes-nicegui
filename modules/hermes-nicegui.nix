@@ -265,8 +265,9 @@ in
         # Sessions created from the UI default to this model. Must be a valid
         # gateway model ID: the gateway falls back to "hermes-agent" (invalid)
         # when the request omits a model, which 400s on the first chat turn.
-        HERMES_DEFAULT_MODEL = config.hermesDeploy.model;
-        HERMES_DEFAULT_PROVIDER = config.hermesDeploy.provider;
+        HERMES_DEFAULT_MODEL = config.hermesDeploy.llm.model;
+        # One shared flag changes model + provider for hermes, hindsight, nicegui, ha.
+        HERMES_DEFAULT_PROVIDER = config.hermesDeploy.llm.provider;
         HERMES_KANBAN_URL = cfg.kanbanUrl;
         HERMES_DATA_DIR = cfg.dataDir;
         HERMES_FILES_ROOT = cfg.filesRoot;

@@ -119,12 +119,14 @@
         ./modules/hermes-tools.nix
         ./modules/hermes-ha.nix
         ./modules/hermes-dashboard.nix
+        ./modules/opencode.nix
         ./modules/llm.nix
         ./modules/hindsight.nix
         ./modules/exposure.nix
         ./modules/cloudflare-tunnel.nix
         ./modules/xaelwiki.nix
         ./modules/hermes-nicegui.nix
+        ./modules/hermes-vnc.nix
       ];
 
       hermes = lib.nixosSystem {

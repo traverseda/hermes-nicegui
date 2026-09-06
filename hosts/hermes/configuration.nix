@@ -19,6 +19,7 @@
 {
   imports = [
     (modulesPath + "/virtualisation/proxmox-lxc.nix")
+    ./../modules/opencode.nix
   ];
 
   proxmoxLXC = {
@@ -58,12 +59,22 @@
     # via the `memory.provider` config key). Points at the local Hindsight
     # service below. The API key lives in the hermes-env secret
     # (HINDSIGHT_API_KEY = the same value as HINDSIGHT_API_TENANT_API_KEY).
+    # HINDSIGHT_BANK_ID is deliberately NOT set: the hermes provider defaults
+    # to the "hermes" bank on its own, and the opencode hindsight plugin
+    # (global opencode config) would otherwise inherit this env var and be
+    # forced off its own `bankId: "code"` — env overrides beat plugin options.
+    # HINDSIGHT_API_TOKEN (same tenant key, added to hermes-env 2026-08-16)
+    # authenticates the opencode plugin against the local API.
     settings.memory.provider = "hindsight";
     environment = {
       HINDSIGHT_MODE = "cloud";
       HINDSIGHT_API_URL = "http://127.0.0.1:8888";
-      HINDSIGHT_BANK_ID = "hermes";
     };
+
+    # Operator mandate t_89f84f69 (2026-08-25): reliability-first free window.
+    # Declared here so the activation deep-merge keeps the live kanban
+    # concurrency instead of reverting it to the module default (1).
+    settings.kanban.max_in_progress_per_profile = 8;
   };
 
   # Git-driven deploy + health-checked auto-rollback (see module docs).
@@ -80,6 +91,30 @@
     healthCheckUrls = [ "https://hermes.0u0.ca/" ];
   };
 
+  # ── opencode global config ─────────────────────────────────────────
+  # opencode's default model on the OpenCode Go gateway is gpt-5.6-luna, so
+  # without a global pin every run OUTSIDE the flake repo (kanban worktrees,
+  # /tmp, other dirs) falls back to Luna while hermes itself runs
+  # quanttrio/Qwen3.6-35B-A3B-AWQ. The repo-level opencode.json only covers
+  # runs inside this repo; this installs the pin into
+  # ~/.config/opencode/opencode.jsonc on every activation so it applies
+  # everywhere and survives re-provisioning.
+  # The same file also loads the @vectorize-io/opencode-hindsight plugin
+  # globally (api http://127.0.0.1:8888, bank "code"), so EVERY opencode
+  # session — repo, worktree, /tmp — retains/recalls against the local
+  # Hindsight service. Auth token comes from HINDSIGHT_API_TOKEN in
+  # hermes-env (see the memory block above), inherited via the gateway env.
+  # Keep the model id in sync with the hermesDeploy.model default
+  # (vllm / quanttrio/Qwen3.6-35B-A3B-AWQ).
+  system.activationScripts.opencode-global-config = {
+    deps = [ "users" ];
+    text = ''
+      install -D -m 0660 -o hermes -g hermes \
+        ${./opencode-global.jsonc} \
+        /var/lib/hermes/.config/opencode/opencode.jsonc
+    '';
+  };
+
   # Content-store fast path: agent-authored skills/tools/MCP servers live in a
   # git-backed store (recovered by `hermes-tool revert`) instead of a Nix
   # rebuild for every new tool. The deploy watchdog tries this BEFORE a
@@ -90,8 +125,8 @@
 
   # ── Hindsight memory service ─────────────────────────────────────────
   # Standalone agent-memory API (retain/recall/reflect), tailnet-only.
-  # Model comes from `hermesDeploy.llm` (defaults to opencode-go /
-  # deepseek-v4-flash); secrets come from the agenix env file below.
+  # Model comes from `hermesDeploy.llm` (defaults to vllm /
+  # quanttrio/Qwen3.6-35B-A3B-AWQ); secrets come from the agenix env file below.
   # Per-bank split: only the `code` bank (opencode) gets byte-exact verbatim
   # retain + engineering missions; the `hermes` bank (the agent's general
   # chat) stays on untouched defaults.
@@ -99,6 +134,10 @@
     enable = true;
     environmentFile = config.age.secrets."hindsight-env".path;
     codeBanks = [ "code" ];
+    # Next.js control-plane web UI (:9999), tailnet-only behind the
+    # HINDSIGHT_CP_ACCESS_KEY login (key already present in hindsight-env).
+    # The exposure registry opens :9999 on tailscale0 automatically.
+    enableControlPlane = true;
   };
 
   # ── Secrets (agenix) ─────────────────────────────────────────────────
@@ -106,6 +145,15 @@
   # /run/agenix/... at activation time — never in /nix/store.
   age.secrets."hermes-env" = {
     file = ../../secrets/hermes-env.age;
+    owner = "hermes";
+    group = "hermes";
+    mode = "0440";
+  };
+  # Home Assistant credentials (HASS_URL, HASS_TOKEN). Appended to the
+  # default profile's .env (homeassistant platform) and, via the hermes-ha
+  # module's shared environmentFiles, to the ha profile's .env as well.
+  age.secrets."hass-env" = {
+    file = ../../secrets/hass-env.age;
     owner = "hermes";
     group = "hermes";
     mode = "0440";
@@ -167,6 +215,7 @@
 
   services.hermes-agent.environmentFiles = [
     config.age.secrets."hermes-env".path
+    config.age.secrets."hass-env".path
   ];
 
   # ── Home Assistant API server ────────────────────────────────────────
@@ -179,6 +228,64 @@
   services.hermes-ha = {
     enable = true;
     apiServerKeyFile = config.age.secrets."api-server-env".path;
+    # Carried over from the old box's ha profile (hermesagent.lan), adapted:
+    # mcp_servers.fixups is deliberately NOT migrated — the ha profile's
+    # escalation is now kanban (see modules/ticketing/ha-hermes.md), not the
+    # Discord fixups forum. Skills lock-down via skills.external_dirs = [] +
+    # profile-local skills dir, matching the old profile's curated set.
+    settings = {
+      agent = {
+        max_turns = 150;
+        reasoning_effort = "minimal";
+        gateway_timeout = 1800;
+      };
+      platforms.homeassistant = {
+        enabled = true;
+        extra = {
+          watch_entities = [ "input_text.hermes_command" ];
+          cooldown_seconds = 5;
+        };
+      };
+      platform_toolsets.homeassistant = [
+        "homeassistant"
+        "web"
+        "tts"
+        "skills"
+        "clarify"
+      ];
+      skills.external_dirs = [ ];
+      tts.provider = "edge";
+      tts.edge.voice = "en-US-AriaNeural";
+      stt.enabled = true;
+      stt.provider = "local";
+      stt.local.model = "base";
+      mcp_servers.xaelwiki = {
+        url = "http://127.0.0.1:8000/mcp";
+        headers.Authorization = "Bearer \${env:XAEL_AUTH_TOKEN}";
+      };
+    };
+  };
+
+  # ── Home Assistant platform (inbound, gateway-level) ────────────────
+  # HA events/voice reach the agent through the gateway's homeassistant
+  # platform and route to the ha profile (ha-voice route), same as on the
+  # old box. Credentials come from hass-env via environmentFiles above.
+  services.hermes-agent.settings = {
+    platforms.homeassistant.enabled = true;
+    # Discord platform (migrated 2026-08-15 from the deprecated bot on
+    # hermes@hermesagent.lan). Token + allowed users + home channel live in
+    # the hermes-env agenix secret (DISCORD_BOT_TOKEN / DISCORD_ALLOWED_USERS
+    # / DISCORD_HOME_CHANNEL), merged into the default profile's .env via
+    # services.hermes-agent.environmentFiles above.
+    platforms.discord.enabled = true;
+    gateway.profile_routes = [
+      {
+        name = "ha-voice";
+        platform = "homeassistant";
+        profile = "ha";
+      }
+    ];
+    platform_toolsets.homeassistant = [ "homeassistant" ];
   };
 
   # ── Hermes web dashboard ─────────────────────────────────────────────
@@ -232,6 +339,16 @@
     gatewayTokenFile = config.age.secrets."hermes-nicegui-gateway-token".path;
     darkMode = true;
   };
+
+  # Loopback-only Xvfb+x11vnc display for human-in-the-loop tasks, served
+  # through the vnc plugin tab. Unit exists always but is started ON DEMAND
+  # by the bot (`systemctl start hermes-vnc`) — never at boot.
+  services.hermes-vnc.enable = true;
+
+  # Operator mandate t_89f84f69: pin model.default via hermesDeploy.model
+  # (modules/hermes-service.nix maps it into settings.model.default) so the
+  # activation deep-merge agrees with the operator-chosen live model.
+  hermesDeploy.model = "quanttrio/Qwen3.6-35b-a3b-awq";
 
   # ── Bot is root ──────────────────────────────────────────────────────
   # Hermes is a self-managing agent: give it root outright and let the
@@ -302,6 +419,18 @@
   # normalises any shell package back to /run/current-system/sw via toShellPath.
   users.users.root.shell = "${pkgs.bash}/bin/bash";
 
+  # Tailscale ssh: pin the Nix shadow login into the tailscaled service PATH.
+  # This VM still carries a Debian-era /usr (pre-NixOS-conversion residue)
+  # whose /usr/bin/login is a generic-ELF binary that NixOS's stub-ld loader
+  # refuses to exec. If the daemon's PATH ever searches /usr/bin, `tailscale
+  # ssh` dies with "Could not start dynamically linked executable:
+  # /usr/bin/login" (seen 2026-08-17: the daemon then ran with a stale
+  # Debian-era environment; current sessions are fine). Pinning shadow keeps
+  # the modern ssh-session path free of the broken binary and gives TTY
+  # sessions a proper PAM login shell even if the tailnet later flips this
+  # node to modern (V2) ssh behavior.
+  systemd.services.tailscaled.path = lib.mkAfter [ pkgs.shadow ];
+
   # ── Networking ───────────────────────────────────────────────────────
   # Proxmox only wires the veth; the container configures eth0 itself
   # (unprivileged LXC: no host-side IP injection). The proxmox-lxc module
@@ -325,9 +454,31 @@
     enable = true;
     # ssh from the Proxmox host / tailnet
     allowedTCPPorts = [ 22 ];
+    # hermes-ha proxy (:8444): Home Assistant (hearth, on the LAN) talks to
+    # the ha profile's OpenAI-compatible endpoint here, bearer-auth'd by the
+    # API_SERVER_KEY. The tailnet side of :8444 is opened by the exposure
+    # registry (modules/exposure.nix → interfaces.tailscale0), so this rule
+    # only needs the LAN interface.
+    interfaces.eth0.allowedTCPPorts = [ 8444 ];
+  };
+
+  # ── Cron ─────────────────────────────────────────────────────────────
+  # cronie for the unattended weekly `nix flake update` crontab entry
+  # (installed in the hermes user crontab; kanban t_70a5fd2e). User
+  # crontabs live in /var/spool/cron/crontabs/.
+  services.cron = {
+    enable = true;
   };
 
   # ── System ───────────────────────────────────────────────────────────
+  # Run the whole box on the user's clock: America/Halifax (ADT UTC-3 /
+  # AST UTC-4). Home Assistant (config.time_zone) and the Hermes app config
+  # (config.yaml timezone) already run America/Halifax; the box system clock
+  # was the odd one out (UTC), which made system-clock readers (food log day
+  # bucketing in food_log.py, cron exprs) disagree with the user's local day
+  # by 3h (4h in AST). With the box on the user's TZ, `datetime.date.today()`
+  # and cron exprs mean LOCAL wall time year-round, DST included.
+  time.timeZone = "America/Halifax";
   system.stateVersion = "26.05";
 
   # configfs cannot be mounted in an unprivileged LXC, so the default
