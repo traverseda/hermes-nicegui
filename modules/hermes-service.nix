@@ -149,6 +149,7 @@ in
         jq
         ripgrep
         tailscale
+        zerotierone
         # nodejs provides `npx`, required by the agentmail MCP server
         # (npx -y agentmail-mcp). Keep in sync with mcpServers.agentmail.
         nodejs
@@ -170,6 +171,14 @@ in
       # so it never appears in /nix/store or the flake repo.
       authKeyFile = "/run/agenix/tailscale-auth";
       extraUpFlags = [ "--ssh" ];
+    };
+
+    # ZeroTier One: gives the LXC access to the 192.168.193.x network where
+    # vLLM runs (192.168.193.96:8000). Without this the LXC cannot reach the
+    # local model and hermes-agent falls back to OpenRouter (400).
+    services.zeroTierOne = {
+      enable = true;
+      participatingNetworks = [ "68bea79acfbb542c" ];
     };
 
     # ── The bot is root — the service sandbox must not veto it ─────────
