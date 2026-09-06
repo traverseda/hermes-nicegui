@@ -69,7 +69,6 @@
     "hermes-agent": {
       "inputs": {
         "flake-parts": "flake-parts",
-        "home-manager": "home-manager_2",
         "nixpkgs": [
           "nixpkgs"
         ],
@@ -79,14 +78,16 @@
         "uv2nix": "uv2nix"
       },
       "locked": {
-        "lastModified": 1788729645,
-        "narHash": "sha256-sOHs6Y0w0cXOykU8IJl3X5rdU2OqchD5h5BatGtsbhk=",
-        "rev": "693641aa8b4359c602283bdbbc14041e03bc47bc",
-        "revCount": 32270,
+        "lastModified": 1788731857,
+        "narHash": "sha256-lh3lD1uK3KVDowPa4hRupcYQ+6sU5yedU7VgtSXCQHU=",
+        "rev": "c9bfb39e271af80fc77f6f418a973a7b1c859f12",
+        "revCount": 22408,
+        "shallow": false,
         "type": "git",
         "url": "file:./vendor/hermes-agent"
       },
       "original": {
+        "shallow": false,
         "type": "git",
         "url": "file:./vendor/hermes-agent"
       }
@@ -94,10 +95,10 @@
     "hermes-nicegui-src": {
       "flake": false,
       "locked": {
-        "lastModified": 1786747489,
-        "narHash": "sha256-03eZ2ddvGQwocMxnHTHVxhXf1B0S8KgYKFYuFBbS4/Q=",
-        "rev": "bdacd8ec0204110b379021dbeadd62e90e822a8a",
-        "revCount": 7,
+        "lastModified": 1788724441,
+        "narHash": "sha256-+Sz4ohFWXAgIaqZE5lWTls/VLoQKXAQa3v8V8ElJGsU=",
+        "rev": "ab5ff3eabc5800f4f6de5cffb641e3baf24e8ac7",
+        "revCount": 39,
         "type": "git",
         "url": "file:./vendor/hermes-nicegui"
       },
@@ -119,27 +120,6 @@
         "owner": "nix-community",
         "repo": "home-manager",
         "rev": "abfad3d2958c9e6300a883bd443512c55dfeb1be",
-        "type": "github"
-      },
-      "original": {
-        "owner": "nix-community",
-        "repo": "home-manager",
-        "type": "github"
-      }
-    },
-    "home-manager_2": {
-      "inputs": {
-        "nixpkgs": [
-          "hermes-agent",
-          "nixpkgs"
-        ]
-      },
-      "locked": {
-        "lastModified": 1786487128,
-        "narHash": "sha256-ad60hrRVhH/bo3Jl1YLzO+QcS3mUNZr9LNJdzhMO2P4=",
-        "owner": "nix-community",
-        "repo": "home-manager",
-        "rev": "f404edbfa4117810c96b97048299242fc50e5362",
         "type": "github"
       },
       "original": {
