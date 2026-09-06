@@ -48,7 +48,7 @@
     # different absolute path on the dev machine vs. the LXC's
     # /var/lib/hermes-deploy). Revisit when nix#12281 lands a real fix.
     hermes-agent = {
-      url = "git+file:./vendor/hermes-agent";
+      url = "git+file:./vendor/hermes-agent?shallow=false";
       inputs.nixpkgs.follows = "nixpkgs";
     };
 
