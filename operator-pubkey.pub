@@ -1,0 +1,7 @@
+# Operator pubkey pulled from root@hermes.lan on first deploy.
+# Used by agenix to encrypt secrets that the build machine can decrypt.
+#
+# Source: cat /root/.ssh/authorized_keys on hermes.lan
+# Last verified: 2026-09-06
+
+ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAINqMoutqmTZsU+nMN5mdsJz+OnzvLtgDYFR/kOYW2YWU traverseda@azrael
