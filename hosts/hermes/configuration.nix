@@ -290,7 +290,7 @@
   hermesDeploy.providers.local = {
     name    = "local";
     provider= "vllm";
-    model   = "quanttrio/Qwen3.6-35b-a3b-awq";
+    model   = "QuantTrio/Qwen3.6-35B-A3B-AWQ";
     baseUrl = "http://192.168.193.96:8000/v1";
   };
   hermesDeploy.providers.openrouter = {

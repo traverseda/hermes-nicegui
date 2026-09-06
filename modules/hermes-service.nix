@@ -209,7 +209,7 @@ in
         # HINDSIGHT_BANK_ID removed (was forcing opencode off the code bank);
         # gateway must reload .env so opencode children authenticate.
         "hindsight-opencode-memory-2026-08-16"
-        # Default model switch to quanttrio/Qwen3.6-35b-a3b-awq (R4 operator
+        # Default model switch to QuantTrio/Qwen3.6-35B-A3B-AWQ (R4 operator
         # mandate t_89f84f69; hermesDeploy.model); gateway must reload
         # config.yaml so new sessions start on the new model.
         "default-model-Qwen3.6-35B-A3B-AWQ-2026-08-26"

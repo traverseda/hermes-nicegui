@@ -23,7 +23,7 @@ let
           hermesDeploy.providers.local = {
             name    = "local";
             provider= "vllm";
-            model   = "quanttrio/Qwen3.6-35b-a3b-awq";
+            model   = "QuantTrio/Qwen3.6-35B-A3B-AWQ";
             baseUrl = "http://192.168.193.96:8000/v1";
           };
           hermesDeploy.defaultProvider = "local";
@@ -89,7 +89,7 @@ pkgs.runCommand "hindsight-config-check"
     ${need "-v /var/lib/hindsight:/home/hindsight/.pg0" "podman.script"}
     ${need "--env-file /dummy/env" "podman.script"}
     ${need "--health-cmd=curl -fsS http://127.0.0.1:8888/health" "podman.script"}
-    ${need "-e HINDSIGHT_API_LLM_MODEL=quanttrio/Qwen3.6-35b-a3b-awq" "podman.script"}
+    ${need "-e HINDSIGHT_API_LLM_MODEL=QuantTrio/Qwen3.6-35B-A3B-AWQ" "podman.script"}
     ${need "-e HINDSIGHT_API_LLM_BASE_URL=http://192.168.193.96:8000/v1" "podman.script"}
     ${need "HINDSIGHT_API_TENANT_EXTENSION" "podman.script"}
 
