@@ -487,7 +487,7 @@ in
         ${lib.getExe pkgs.git} -C ${cfg.repoDir} add -A 2>/dev/null || true
         ${lib.getExe pkgs.git} -C ${cfg.repoDir} commit -q -m "initial import from operator deploy" 2>/dev/null || true
       fi
-      # Vendor submodules (hermes-agent etc.) are NOT rsync-ed to the box —
+      # Git submodules (hermes-agent, hermes-nicegui) are NOT rsync-ed to the box —
       # they are tracked separately in the flake repo. Initialize them now so
       # the hermes-agent binary can find its venv at vendor/hermes-agent/.venv.
       ${lib.getExe pkgs.git} -C ${cfg.repoDir} submodule update --init --recursive 2>/dev/null || true
