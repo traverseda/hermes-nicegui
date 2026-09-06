@@ -12,7 +12,7 @@
 # Usage:  scripts/rollback.sh [--host hermes@<ip>]
 set -euo pipefail
 
-HOST="${HERMES_HOST:-root@${HERMES_TAILSCALE_IP:-hermes}}"
+HOST="${HERMES_HOST:-root@${HERMES_TAILSCALE_IP:-hermes.lan}}"
 [[ $# -gt 0 ]] && HOST="$1"
 
 echo "== rolling back one generation on $HOST =="

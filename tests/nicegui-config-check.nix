@@ -6,7 +6,11 @@
 #
 # Run with:  nix build .#checks.x86_64-linux.nicegui-config-check
 
-{ nixpkgs, hermes-agent }:
+{
+  nixpkgs,
+  hermes-agent,
+  hermes-nicegui-src,
+}:
 let
   system = "x86_64-linux";
   inherit (nixpkgs) lib;
@@ -15,7 +19,25 @@ let
   cfg =
     (lib.nixosSystem {
       inherit system;
+      specialArgs = { inherit hermes-nicegui-src; };
       modules = [
+        # Same inline-snapshot test-suppression overlay every real config gets
+        # (see flake.nix packageOverlays) — the nicegui python env pulls in
+        # fastapi → inline-snapshot, whose checkPhase breaks under the pinned
+        # pytest. Without this, this check itself fails to build.
+        {
+          nixpkgs.overlays = [
+            (final: prev: {
+              python312 = prev.python312.override {
+                packageOverrides = _pyfinal: pyprev: {
+                  inline-snapshot = pyprev.inline-snapshot.overridePythonAttrs (old: {
+                    doCheck = false;
+                  });
+                };
+              };
+            })
+          ];
+        }
         hermes-agent.nixosModules.default
         ../modules/hermes-service.nix
         ../modules/hermes-deploy.nix
@@ -60,12 +82,15 @@ pkgs.runCommand "nicegui-config-check"
   ''
     cat $niceguiUnit > nicegui.unit
 
-    # ── unit exists, runs the editable checkout with the Nix python env ──
+    # ── unit exists, runs the vendored source (immutable store path) with
+    #    the Nix python env — no live/editable checkout ──────────────────
     ${need "ExecStart=" "nicegui.unit"}
-    ${need "/bin/python /var/lib/hermes-nicegui/src/main.py" "nicegui.unit"}
-    ${need "PYTHONPATH=/var/lib/hermes-nicegui/src/src:" "nicegui.unit"}
+    ${need "/bin/python /nix/store/" "nicegui.unit"}
+    ${need "/main.py" "nicegui.unit"}
+    ${need "PYTHONPATH=/nix/store/" "nicegui.unit"}
     ${need "hermes-nicegui-dist-info" "nicegui.unit"}
     ${need "WantedBy=multi-user.target" "nicegui.unit"}
+    ${mustNot "/var/lib/hermes-nicegui/src" "nicegui.unit"}
 
     # ── runs as the hermes user, hardened like the other units ──────────
     ${need "User=hermes" "nicegui.unit"}

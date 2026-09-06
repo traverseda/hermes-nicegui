@@ -113,6 +113,10 @@ in
         # nodejs provides `npx`, required by the agentmail MCP server
         # (npx -y agentmail-mcp). Keep in sync with mcpServers.agentmail.
         nodejs
+        # Secret rotation: age decrypts/encrypts the agenix *.age files with
+        # the LXC host key (/etc/ssh/ssh_host_ed25519_key). The bot needs this
+        # to fix its own secrets (e.g. the CHANGE-ME placeholder credentials).
+        age
       ];
     };
 
@@ -124,8 +128,36 @@ in
       extraUpFlags = [ "--ssh" ];
     };
 
+    # ── The bot is root — the service sandbox must not veto it ─────────
+    # hosts/hermes/configuration.nix gives the hermes user passwordless sudo
+    # and nix trusted-user. The vendored hermes-agent module hardens the
+    # service with NoNewPrivileges + ProtectSystem=strict, which makes that
+    # grant useless: NoNewPrivileges blocks sudo/setuid at the kernel level
+    # (the bot process shows NoNewPrivs: 1) and ProtectSystem=strict freezes
+    # /etc,/usr,/boot for every process in the unit, root included. Relax both
+    # so the bot's root is real root — the safety net is the rollback
+    # machinery, not a kernel sandbox.
+    systemd.services.hermes-agent = {
+      serviceConfig = {
+        NoNewPrivileges = lib.mkForce false;
+        ProtectSystem = lib.mkForce false;
+      };
+      # The module's PATH only has the agent's extraPackages. Expose the
+      # setuid sudo wrapper (/run/wrappers/bin) and the system tools
+      # (/run/current-system/sw/bin) so the bot can actually sudo.
+      path = [
+        "/run/wrappers"
+        "/run/current-system/sw"
+      ];
+    };
+
     # Never put secrets in Nix config: values end up in /nix/store which is
     # world-readable. agenix decrypts them to /run/agenix only at activation.
-    environment.systemPackages = [ pkgs.tailscale ];
+    environment.systemPackages = [
+      pkgs.tailscale
+      # age on the system PATH too (the agent extraPackages above cover the
+      # gateway PATH; this covers interactive hermes shells / sudo).
+      pkgs.age
+    ];
   };
 }

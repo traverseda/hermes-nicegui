@@ -8,29 +8,30 @@
 # (HermesExecutor) — sessions, cron mutations, and chat all go through the
 # CLI. Kanban talks to the dashboard's own web server instead (cookie login).
 #
-# Design — follows the xaelwiki "editable, low-stakes" pattern:
-#   * The SOURCE ships as a git submodule (vendor/hermes-nicegui), pinned in
-#     this repo. On the LXC it is materialized into the deploy checkout and
-#     SYMLINKED into the run location (${stateDir}/src). The service runs the
-#     checkout directly via a Nix python env — editing the submodule files
-#     takes effect on `systemctl restart hermes-nicegui`, with NO
-#     nixos-rebuild. The deploy flow runs `git submodule update --init`
-#     (never --force), so local edits survive deploys, and rollback is
-#     `git checkout <good-rev>` inside the submodule — independent of Nix.
+# Design — vendored source, system lane (see README "Two change lanes"):
+#   * The SOURCE ships as a git submodule (vendor/hermes-nicegui), fetched by
+#     the `hermes-nicegui-src` flake input (git+file:./vendor/hermes-nicegui)
+#     and built into the Nix store like any other flake input. Editing the
+#     submodule requires a commit inside it, `nix flake lock --update-input
+#     hermes-nicegui-src`, and a `nixos-rebuild switch` to take effect — there
+#     is no live/editable checkout and no restart-to-apply. This is
+#     deliberate: it's in-process application code, not low-stakes content, so
+#     it gets the same commit -> switch -> generation rollback safety net as
+#     everything else in the system lane. modules/hermes-deploy.nix's
+#     generation-aware rollback resets vendor/hermes-nicegui's checkout (via
+#     `git submodule update`) to match whichever generation is restored.
 #   * PLUGIN DISCOVERY WITHOUT A PIP INSTALL. hermes-nicegui discovers its
 #     built-in plugins via the `hermes_nicegui.plugins` importlib.metadata
-#     entry-point group (web.py::build → plugin.py::load_plugins). A bare
-#     package install is the normal way entry points get registered, but that
-#     would bake the source into the store and break the editable model. So
-#     we ship a MINIMAL generated `hermes-nicegui-*.dist-info` (METADATA +
-#     entry_points.txt) on PYTHONPATH next to the live checkout: importlib
-#     discovers it as a distribution and resolves the entry-point values
-#     against the real, editable modules. Verified with the app's own venv.
-#     Keep entry_points.txt in sync with [project.entry-points] in the
-#     submodule's pyproject.toml.
-#   * IMMUTABLE PYTHON ENV, editable source. nicegui/httpx/loguru/
-#     pydantic-settings/pyyaml/zstandard all come from nixpkgs; only the app
-#     code is the mutable submodule.
+#     entry-point group (web.py::build → plugin.py::load_plugins). Rather than
+#     a full pip/setuptools build of the vendored source, we ship a MINIMAL
+#     generated `hermes-nicegui-*.dist-info` (METADATA + entry_points.txt) on
+#     PYTHONPATH next to appSrc: importlib discovers it as a distribution and
+#     resolves the entry-point values against the real modules. Verified with
+#     the app's own venv. Keep entry_points.txt in sync with
+#     [project.entry-points] in the submodule's pyproject.toml.
+#   * Both the python env (nicegui/httpx/loguru/pydantic-settings/pyyaml/
+#     zstandard, from nixpkgs) AND the app code (appSrc) are immutable store
+#     paths — nothing about this service is live-editable.
 #   * Runs AS THE hermes USER, colocated with the agent: the CLI subprocess,
 #     profile switcher, and direct state reads (HermesExecutor reads
 #     state.db / jobs.json straight from disk) all assume this app shares
@@ -53,6 +54,7 @@
   config,
   pkgs,
   lib,
+  hermes-nicegui-src,
   ...
 }:
 
@@ -60,9 +62,13 @@ let
   cfg = config.services.hermes-nicegui;
   agent = config.services.hermes-agent;
 
-  # Immutable part: the python environment providing hermes-nicegui's
-  # dependencies. The app code itself comes from the editable submodule
-  # checkout via PYTHONPATH.
+  # Immutable app source: the vendored submodule, fetched and pinned by the
+  # hermes-nicegui-src flake input. A plain Nix store path — no runtime
+  # dependency on the deploy checkout.
+  appSrc = hermes-nicegui-src;
+
+  # The python environment providing hermes-nicegui's dependencies. The app
+  # code itself comes from appSrc via PYTHONPATH.
   pyEnv = pkgs.python312.withPackages (ps: [
     ps.nicegui
     ps.httpx
@@ -73,7 +79,7 @@ let
   ]);
 
   # Minimal distribution metadata so importlib.metadata discovers the
-  # built-in plugins without a pip install of the editable checkout.
+  # built-in plugins without a full pip/setuptools build of appSrc.
   # Keep entry_points.txt in sync with pyproject.toml's
   # [project.entry-points."hermes_nicegui.plugins"].
   distInfo = pkgs.runCommand "hermes-nicegui-dist-info" { } ''
@@ -94,8 +100,6 @@ let
     EOF
   '';
 
-  # Path of the submodule checkout inside the deploy repo on the LXC.
-  submodulePath = "${config.services.hermes-deploy.repoDir}/vendor/hermes-nicegui";
 in
 {
   options.services.hermes-nicegui = {
@@ -123,9 +127,10 @@ in
       type = lib.types.str;
       default = "/var/lib/hermes-nicegui";
       description = ''
-        Service state: run-location symlink (${cfg.stateDir}/src), the app's
-        HERMES_DATA_DIR (admin account + session-cookie secret). Owned by the
-        hermes user.
+        Service state: the app's HERMES_DATA_DIR (admin account +
+        session-cookie secret). Owned by the hermes user. The app source
+        itself is immutable (built into the store from the hermes-nicegui-src
+        flake input) and does not live here.
       '';
     };
 
@@ -215,26 +220,16 @@ in
   };
 
   config = lib.mkIf cfg.enable {
-    # ── Activation: materialize submodule + symlink into run location ───
-    # Mirrors the xaelwiki pattern. `git submodule update --init` is only
-    # invoked when the checkout is missing, never force-updated, so local
-    # edits to the submodule survive deploys — that is the point.
-    system.activationScripts."hermes-nicegui-source" = lib.stringAfter [ "users" ] ''
-      deploy_repo=${lib.escapeShellArg config.services.hermes-deploy.repoDir}
-      if [ -d "$deploy_repo/.git" ] && [ ! -e ${lib.escapeShellArg "${submodulePath}/.git"} ]; then
-        echo "hermes-nicegui: initializing source submodule"
-        git -C "$deploy_repo" submodule update --init vendor/hermes-nicegui || true
-      fi
+    # ── State dir: data only (admin account, session secret) — no source ──
+    system.activationScripts."hermes-nicegui-state" = lib.stringAfter [ "users" ] ''
       mkdir -p ${cfg.stateDir}
       chown ${agent.user}:${agent.group} ${cfg.stateDir}
       chmod 0750 ${cfg.stateDir}
-      ln -sfn ${lib.escapeShellArg submodulePath} ${cfg.stateDir}/src
-      chown -h ${agent.user}:${agent.group} ${cfg.stateDir}/src
     '';
 
     # ── The web UI itself ───────────────────────────────────────────────
-    # Runs the EDITABLE submodule checkout (via the run-location symlink)
-    # with the immutable Nix python env. PYTHONPATH points at the checkout's
+    # Runs the IMMUTABLE app source (appSrc, from the hermes-nicegui-src
+    # flake input) with the Nix python env. PYTHONPATH points at the source's
     # src/ package dir AND at the generated dist-info so importlib.metadata
     # discovers the built-in plugins. The `hermes` CLI subprocess (sessions/
     # cron/chat) uses the exact binary the agent runs, and shares
@@ -276,7 +271,7 @@ in
         HERMES_DATA_DIR = cfg.dataDir;
         HERMES_FILES_ROOT = cfg.filesRoot;
         HERMES_LOG_LEVEL = cfg.logLevel;
-        PYTHONPATH = "${cfg.stateDir}/src/src:${distInfo}";
+        PYTHONPATH = "${appSrc}/src:${distInfo}";
       } // cfg.extraEnv;
 
       serviceConfig = {
@@ -284,7 +279,7 @@ in
         Group = agent.group;
         WorkingDirectory = agent.workingDirectory;
 
-        ExecStart = "${pyEnv}/bin/python ${cfg.stateDir}/src/main.py";
+        ExecStart = "${pyEnv}/bin/python ${appSrc}/main.py";
 
         # Kanban creds + gateway bearer token come from agenix env files, as
         # process env vars (which win over any .env file the app also loads).
@@ -308,7 +303,6 @@ in
           cfg.stateDir
           cfg.dataDir
           agent.stateDir
-          config.services.hermes-deploy.repoDir
         ];
         PrivateTmp = true;
       };

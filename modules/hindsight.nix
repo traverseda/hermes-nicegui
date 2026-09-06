@@ -79,6 +79,12 @@ let
       enable_auto_consolidation = cfg.codeBankEnableAutoConsolidation;
     };
   };
+  # Hand the JSON to curl from a file, NOT via shell single-quote interpolation:
+  # the retain_mission prose contains apostrophes (e.g. 'Technical preferences
+  # and conventions'), which break out of `-d '...'` and word-split the curl
+  # args ("Could not resolve host: preferences"). `curl -d @file` avoids the
+  # shell entirely.
+  codeBankConfigFile = pkgs.writeText "hindsight-code-bank-config.json" codeBankConfigJson;
 in
 {
   options.services.hindsight = {
@@ -405,6 +411,9 @@ in
       };
       script = "${pkgs.writeShellScript "hindsight-code-bank-config" ''
         set -eu
+        # Clear error instead of "unbound variable" if the agenix env file was
+        # not yet decrypted when this unit fired (first-boot provisioning race).
+        : "''${HINDSIGHT_API_TENANT_API_KEY:?hindsight env missing HINDSIGHT_API_TENANT_API_KEY — is /run/agenix/hindsight-env present?}"
         api="http://127.0.0.1:${toString cfg.apiPort}"
         key="$HINDSIGHT_API_TENANT_API_KEY"
         banks="${lib.concatStringsSep " " cfg.codeBanks}"
@@ -426,7 +435,7 @@ in
           curl -fsS -X PATCH "$api/v1/default/banks/$bank/config" \
             -H "Authorization: Bearer $key" \
             -H "Content-Type: application/json" \
-            -d '${codeBankConfigJson}' >/dev/null
+            -d @${codeBankConfigFile} >/dev/null
           echo "hindsight: configured $bank as a code bank"
         done
       ''}";

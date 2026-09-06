@@ -1,21 +1,23 @@
-# xaelwiki — shared, editable markdown notes MCP server.
+# xaelwiki — shared markdown notes MCP server.
 #
 # xaelwiki (https://github.com/traverseda/xaelWiki) is a markdown-native notes
 # MCP server: agents read, search, capture, edit, and re-file notes over MCP,
 # and a git history makes every change reversible.
 #
-# Design — FAST, LOW-STAKES, INDEPENDENTLY REVERTIBLE:
-#   * The xaelWiki SOURCE ships as a git submodule (vendor/xaelWiki), pinned in
-#     this repo. On the LXC it is materialized into the deploy checkout and
-#     SYMLINKED into the run location (${stateDir}/src). The service runs the
-#     checkout directly via a Nix python env — so editing the submodule files
-#     takes effect on `systemctl restart xaelwiki`, with NO nixos-rebuild.
-#   * That is deliberate: notes are non-critical. A broken xaelwiki does not
-#     brick the agent, and the source is its own git repo, so rollback is
-#     `git checkout <good-rev>` (or git revert) inside the submodule — entirely
-#     independent of Nix generations / system rollback. The deploy flow never
-#     force-updates the submodule, so local edits survive deploys.
-#   * The NOTES VAULT is a separate git repo cloned from the operator's Codeberg
+# Design — vendored source (system lane) + a separate, genuinely low-stakes
+# notes vault (content, not code):
+#   * The xaelWiki SOURCE (the MCP server code) ships as a git submodule
+#     (vendor/xaelWiki), fetched by the `xaelwiki-src` flake input
+#     (git+file:./vendor/xaelWiki) and built into the Nix store like any
+#     other flake input. It is application code that runs as a network-facing
+#     MCP server with write access to the notes vault, so — same as
+#     hermes-agent / hermes-nicegui — it is NOT live-editable: a change
+#     requires a commit inside the submodule, `nix flake lock --update-input
+#     xaelwiki-src`, and a `nixos-rebuild switch`. modules/hermes-deploy.nix's
+#     generation-aware rollback resets vendor/xaelWiki's checkout (via `git
+#     submodule update`) to match whichever generation is restored.
+#   * The NOTES VAULT (the actual markdown content) is what stays fast and
+#     low-stakes: a separate git repo cloned from the operator's Codeberg
 #     remote (notes.git) with a dedicated SSH deploy key. The server auto-pulls
 #     before each mutation and auto-pushes after, keeping the LXC vault in sync
 #     with ~/Code/personal/xaelWiki/notes.
@@ -31,21 +33,25 @@
 #   * Secrets come from agenix: the bearer token (xaelwiki-env) and the SSH
 #     deploy key for the notes repo (xaelwiki-ssh). Never in Nix config.
 #
-# Only the notes vault and the submodule working tree are writable state; both
-# are git repos. Everything else (python env, units) is immutable NixOS.
+# Only the notes vault is writable state (its own git repo). The app source
+# and python env are both immutable NixOS store paths.
 
 {
   config,
   pkgs,
   lib,
+  xaelwiki-src,
   ...
 }:
 
 let
   cfg = config.services.xaelwiki;
 
+  # Immutable app source: the vendored submodule, fetched and pinned by the
+  # xaelwiki-src flake input. A plain Nix store path.
+  appSrc = xaelwiki-src;
+
   # Immutable part: the python environment providing xaelwiki's dependencies.
-  # The code itself comes from the editable submodule checkout.
   pyEnv = pkgs.python314.withPackages (ps: [
     ps.fastmcp
     ps.pyyaml
@@ -56,9 +62,6 @@ let
   knownHosts = ''
     codeberg.org ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIIVIC02vnjFyL+I4RHfvIGNtOgJMe769VTF1VR4EB3ZB
   '';
-
-  # Path of the submodule checkout inside the deploy repo on the LXC.
-  submodulePath = "${config.services.hermes-deploy.repoDir}/vendor/xaelWiki";
 in
 {
   options.services.xaelwiki = {
@@ -67,7 +70,7 @@ in
     stateDir = lib.mkOption {
       type = lib.types.str;
       default = "/var/lib/xaelwiki";
-      description = "Service state: run-location symlink, notes vault, SSH deploy key.";
+      description = "Service state: notes vault, SSH deploy key. App source is immutable and does not live here.";
     };
 
     port = lib.mkOption {
@@ -153,23 +156,9 @@ in
       headers.Authorization = "Bearer \${XAEL_AUTH_TOKEN}";
     };
 
-    # ── Activation: materialize submodule + symlink into run location ───
-    # Runs as root. `git submodule update --init` is only invoked when the
-    # checkout is missing (first boot / fresh clone), never force-updated, so
-    # local edits to the submodule survive deploys — that is the point.
-    system.activationScripts."xaelwiki-source" = lib.stringAfter [ "users" ] ''
-      deploy_repo=${lib.escapeShellArg config.services.hermes-deploy.repoDir}
-      if [ -d "$deploy_repo/.git" ] && [ ! -e ${lib.escapeShellArg "${submodulePath}/.git"} ]; then
-        echo "xaelwiki: initializing source submodule"
-        git -C "$deploy_repo" submodule update --init vendor/xaelWiki || true
-      fi
-      if [ -d ${lib.escapeShellArg submodulePath} ]; then
-        chown -R xaelwiki:xaelwiki ${lib.escapeShellArg submodulePath}
-      fi
-      mkdir -p ${cfg.stateDir}
-      ln -sfn ${lib.escapeShellArg submodulePath} ${cfg.stateDir}/src
-      chown -h xaelwiki:xaelwiki ${cfg.stateDir}/src
-      install -d -o xaelwiki -g xaelwiki -m 0750 ${cfg.stateDir}/.ssh ${cfg.stateDir}/notes
+    # ── Activation: state dirs only (SSH key + notes vault) — no source ──
+    system.activationScripts."xaelwiki-state" = lib.stringAfter [ "users" ] ''
+      install -d -o xaelwiki -g xaelwiki -m 0750 ${cfg.stateDir} ${cfg.stateDir}/.ssh ${cfg.stateDir}/notes
     '';
 
     # ── Vault bootstrap: SSH key + clone the notes repo ─────────────────
@@ -208,11 +197,11 @@ in
     };
 
     # ── The MCP server itself ────────────────────────────────────────────
-    # Runs the EDITABLE submodule checkout (via the run-location symlink)
-    # with the immutable Nix python env. PYTHONPATH points at the checkout's
-    # src/ package dir so `python -m xaelwiki.server` resolves.
+    # Runs the IMMUTABLE app source (appSrc, from the xaelwiki-src flake
+    # input) with the Nix python env. PYTHONPATH points at appSrc's src/
+    # package dir so `python -m xaelwiki.server` resolves.
     systemd.services.xaelwiki = {
-      description = "xaelwiki notes MCP server (editable)";
+      description = "xaelwiki notes MCP server";
       after = [
         "xaelwiki-vault.service"
         "network-online.target"
@@ -225,7 +214,7 @@ in
 
       environment = {
         HOME = cfg.stateDir;
-        PYTHONPATH = "${cfg.stateDir}/src/src";
+        PYTHONPATH = "${appSrc}/src";
         XAEL_TRANSPORT = "streamable-http";
         XAEL_HOST = "0.0.0.0";
         XAEL_PORT = toString cfg.port;
@@ -249,9 +238,15 @@ in
         ProtectHome = false;
         ReadWritePaths = [
           cfg.stateDir
-          config.services.hermes-deploy.repoDir
         ];
         PrivateTmp = true;
+        # The MCP endpoint serves streamable-http and refuses to start without
+        # XAEL_AUTH_TOKEN. That token lives in the agenix xaelwiki-env secret —
+        # WITHOUT this EnvironmentFile the unit starts with no token and
+        # crash-loops ("HTTP transport requires XAEL_AUTH_TOKEN"). This was
+        # broken since the module was written (the env file was only wired to
+        # the hermes-agent unit, never here).
+        EnvironmentFile = lib.optionals (cfg.environmentFile != null) [ cfg.environmentFile ];
       };
 
       path = with pkgs; [

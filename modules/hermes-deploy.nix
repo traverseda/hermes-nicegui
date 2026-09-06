@@ -23,6 +23,18 @@
 #     stopped service (or a planned outage) is never auto-rolled-back.
 #   * Proxmox snapshots (`pct snapshot`) — external safety net, scripted in
 #     scripts/deploy.sh.
+#
+# Submodule-aware rollback: vendor/hermes-agent, vendor/hermes-nicegui, and
+# vendor/xaelWiki are real git submodules, tracked normally by ${cfg.repoDir}
+# (no more excluding vendor/ from the ledger — that was the previous design,
+# and it meant a generation rollback could never actually undo a bad self-edit
+# to the agent's own source). Every commit that produces a generation gets
+# tagged `gen-<N>`; any rollback path (deploy-time auto-rollback,
+# hermes-rollback, the watchdog) resets the repo to that tag AND runs `git
+# submodule update` afterwards, so vendor/* checkouts always move in lockstep
+# with the Nix generation they belong to. Without the submodule sync step, the
+# NEXT deploy would just re-propose the same bad vendored code, since `git add
+# -A` picks up whatever commit each submodule currently has checked out.
 
 {
   config,
@@ -34,9 +46,18 @@
 let
   cfg = config.services.hermes-deploy;
 
+  # The ACTIVE generation — what is running right now — not the highest-
+  # numbered one. `nix-env --rollback` does NOT create a new generation: it
+  # only moves the `(current)` marker back while the highest number stays put.
+  # So `list-generations | tail -n1` keeps returning the stale high number
+  # after a rollback and the watchdog would roll back PAST last-known-good
+  # forever. Reading the system profile link is the only reliable answer.
+  # NB: the link is `system-<N>-link` (no leading dash) — a pattern expecting
+  # `-system-` silently never matches and returns empty, which breaks the
+  # watchdog's rollback guard AND writes an empty last-known-good.
   currentGeneration = ''
-    nix-env -p /nix/var/nix/profiles/system --list-generations \
-      | tail -n1 | awk '{print $1}'
+    readlink /nix/var/nix/profiles/system \
+      | sed -n 's/.*system-\([0-9][0-9]*\)-link$/\1/p'
   '';
 
   healthCheckScript = pkgs.writeShellScript "hermes-health-check" cfg.healthCheck;
@@ -44,13 +65,68 @@ let
   # Content-lane recovery hook: when the agent is unhealthy, try reverting the
   # fast-path content store (skills/tools/MCP registrations) BEFORE spending a
   # Nix generation. Set by modules/hermes-tools.nix; empty = no content lane.
-  contentRecoveryScript = lib.optionalString (cfg.contentRecovery != "")
-    (pkgs.writeShellScript "hermes-content-recovery" cfg.contentRecovery);
+  contentRecoveryScript = lib.optionalString (cfg.contentRecovery != "") (
+    pkgs.writeShellScript "hermes-content-recovery" cfg.contentRecovery
+  );
+
+  # Roll back exactly one generation WITHOUT nixos-rebuild. nixos-rebuild's
+  # `--rollback` self-locates by building itself from <nixpkgs/nixos>, which
+  # needs NIX_PATH (nixpkgs + nixos-config) — a flake-only box doesn't have
+  # those, so it fails with "file 'nixos-config' was not found". The low-level
+  # equivalent is identical in effect: `nix-env --rollback` moves the system
+  # profile marker back one generation (it does NOT create a new generation),
+  # then we re-run that generation's own switch-to-configuration.
+  #
+  # switch-to-configuration is run as a DETACHED transient unit: it treats any
+  # active-but-unwanted unit (wantedBy=[]) as "to stop", and hermes-rollback /
+  # hermes-deploy / hermes-watchdog are exactly that while they run the switch
+  # — a foreground switch gets TERM'd mid-flight (observed: "stopping the
+  # following units: hermes-rollback.service"). As a transient unit the switch
+  # survives that stop.
+  rollbackGeneration = ''
+    nix-env -p /nix/var/nix/profiles/system --rollback
+    systemd-run --collect --quiet /nix/var/nix/profiles/system/bin/switch-to-configuration switch
+  '';
+
+  # Bash functions shared by all three scripts below (deploy/rollback/
+  # watchdog). Each script defines its own `log()` first; these assume it
+  # exists.
+  #
+  # tag_gen: record which commit produced a generation, right after a switch
+  # (regardless of whether it turns out healthy — this is a factual mapping,
+  # not a health judgement; last-known-good tracks health separately).
+  #
+  # sync_repo_to_gen: the git-ledger half of a rollback. A Nix-level rollback
+  # (rollbackGeneration above) only restores the system closure; it does
+  # nothing to ${cfg.repoDir}'s working tree. Without also moving the outer
+  # repo (and therefore every vendor/* submodule gitlink in it) back to the
+  # commit that produced the target generation, the working tree stays at the
+  # newer/bad commit and the next deploy's `git add -A` would just re-propose
+  # the exact code that was just rolled back from. `git submodule update`
+  # after the reset moves each vendor/* submodule to the commit recorded in
+  # that commit's tree (a plain, well-defined git operation — submodules are
+  # ordinary gitlinks).
+  gitSyncFns = ''
+    tag_gen() {
+      git -C ${cfg.repoDir} tag -f "gen-$1" HEAD >/dev/null 2>&1 || true
+    }
+    sync_repo_to_gen() {
+      local gen="$1"
+      if git -C ${cfg.repoDir} rev-parse -q --verify "refs/tags/gen-$gen" >/dev/null 2>&1; then
+        git -C ${cfg.repoDir} reset --hard "gen-$gen"
+        git -C ${cfg.repoDir} submodule update --init --recursive 2>/dev/null || true
+        log "synced git ledger + vendor/ submodules to gen-$gen"
+      else
+        log "WARNING: no gen-$gen tag recorded — git ledger and vendor/ checkouts were NOT moved and may not match the restored generation"
+      fi
+    }
+  '';
 
   deployScript = pkgs.writeShellScript "hermes-deploy-script" ''
     set -euo pipefail
 
     log() { echo "[hermes-deploy] $*"; }
+    ${gitSyncFns}
 
     # No git remote: the checkout in ${cfg.repoDir} IS the source of truth.
     # The operator pushes a fresh copy (scripts/deploy.sh rsyncs it), and the
@@ -61,10 +137,13 @@ let
     git -C ${cfg.repoDir} config user.email "hermes-deploy@localhost"
     git -C ${cfg.repoDir} add -A
     git -C ${cfg.repoDir} commit -q -m "deploy $(date -Is)" 2>/dev/null || true
-    # Materialize git submodules (e.g. vendor/xaelWiki) on first sync. Never
-    # --force: local edits inside a submodule (xaelwiki source) must survive
-    # deploys — that is the "editable, low-stakes" design.
-    git -C ${cfg.repoDir} submodule update --init 2>/dev/null || true
+    # Initialize any vendor/* submodule that has never been checked out on
+    # this box (fresh clone / newly added submodule). Does NOT touch an
+    # already-initialized submodule's checked-out commit — `git add -A` above
+    # already captured whatever each submodule had checked out (which is why
+    # a code change must be committed INSIDE the submodule first: an
+    # uncommitted edit there is invisible to `git add -A` and never ships).
+    git -C ${cfg.repoDir} submodule update --init --recursive 2>/dev/null || true
 
     PREV_GEN=$(${currentGeneration})
     log "previous generation: $PREV_GEN"
@@ -74,6 +153,7 @@ let
       | tee -a /var/log/hermes-deploy.log
 
     CUR_GEN=$(${currentGeneration})
+    tag_gen "$CUR_GEN"
 
     log "asking agent for a health report (grace ${toString cfg.gracePeriod}s)"
     if timeout ${toString cfg.gracePeriod} bash ${healthCheckScript}; then
@@ -95,36 +175,47 @@ let
     ''}
 
     log "AGENT REPORTED UNHEALTHY — rolling back one generation to $PREV_GEN"
-    nixos-rebuild switch "$(readlink -f /nix/var/nix/profiles/system-''${PREV_GEN}-link)" 2>&1 \
-      | tee -a /var/log/hermes-deploy.log || true
-    echo "rolled back from generation $CUR_GEN to $PREV_GEN"
+    ${rollbackGeneration} 2>&1 | tee -a /var/log/hermes-deploy.log || true
+    ROLLED_TO=$(${currentGeneration})
+    if [ "$ROLLED_TO" != "$PREV_GEN" ]; then
+      log "WARNING: expected to be at generation $PREV_GEN but am at $ROLLED_TO"
+    else
+      log "rolled back from generation $CUR_GEN to $PREV_GEN"
+    fi
+    # Move the outer repo (and every vendor/* submodule) back in step with
+    # the generation we actually landed on.
+    sync_repo_to_gen "$ROLLED_TO"
     exit 1
   '';
 
   rollbackScript = pkgs.writeShellScript "hermes-rollback-script" ''
     set -euo pipefail
     log() { echo "[hermes-rollback] $*"; }
-
-    # No git remote: the checkout in ${cfg.repoDir} IS the source of truth.
-    # Step the local ledger back one commit (the deploy script guarantees the
-    # active state is always a commit), then roll back one generation.
-    log "reverting flake repo by one commit"
-    git -C ${cfg.repoDir} reset --hard HEAD~1 2>/dev/null || true
-    git -C ${cfg.repoDir} submodule update --init 2>/dev/null || true
+    ${gitSyncFns}
 
     log "rolling back system by one generation"
-    nixos-rebuild switch --rollback 2>&1 | tee -a /var/log/hermes-deploy.log
+    # `|| true`: a single-generation system (nowhere to roll back to) makes
+    # `nix-env --rollback` fail — that must not abort the script before the
+    # git-sync step below, which is what actually needs to run regardless
+    # (it just reflects back whatever generation we're really on).
+    ${rollbackGeneration} 2>&1 | tee -a /var/log/hermes-deploy.log || true
+
+    # Move the outer repo (and every vendor/* submodule) back to match
+    # whichever generation we actually landed on.
+    ROLLED_TO=$(${currentGeneration})
+    sync_repo_to_gen "$ROLLED_TO"
 
     # Mark this generation known-good only if the agent reports healthy again.
     sleep 10
     if timeout ${toString cfg.gracePeriod} bash ${healthCheckScript}; then
-      echo "$(${currentGeneration})" > ${cfg.stateDir}/last-known-good
+      echo "$ROLLED_TO" > ${cfg.stateDir}/last-known-good
     fi
   '';
 
   watchdogScript = pkgs.writeShellScript "hermes-watchdog-script" ''
     set -euo pipefail
     log() { echo "[hermes-watchdog] $*"; }
+    ${gitSyncFns}
 
     KNOWN_GOOD="${cfg.stateDir}/last-known-good"
     mkdir -p ${cfg.stateDir}
@@ -166,7 +257,9 @@ let
     if [ "$CUR_GEN" -gt "$LAST_GOOD" ] 2>/dev/null; then
       log "current generation $CUR_GEN is newer than last-known-good $LAST_GOOD"
       log "rolling back exactly one generation"
-      nixos-rebuild switch --rollback 2>&1 | tee -a /var/log/hermes-deploy.log || true
+      ${rollbackGeneration} 2>&1 | tee -a /var/log/hermes-deploy.log || true
+      ROLLED_TO=$(${currentGeneration})
+      sync_repo_to_gen "$ROLLED_TO"
       exit 1
     fi
 
@@ -241,6 +334,66 @@ in
   };
 
   config = lib.mkIf cfg.enable {
+    # ── Git ownership: the worktree is hermes-owned (the bot must edit it)
+    #    but git is ALSO run by root (deploy/rollback/watchdog services,
+    #    hermes-status, and every activation). git ≥2.35 refuses to operate on
+    #    a repo owned by another user (CVE-2022-24765), so without an explicit
+    #    exception every root-run git command fails with "detected dubious
+    #    ownership". `sync_repo_to_gen`'s `git submodule update` runs INSIDE
+    #    each vendor/* submodule as root too — each one needs its own
+    #    safe.directory entry, or a rollback silently fails to sync vendor/*
+    #    with the same "dubious ownership" error. Scope the exception to
+    #    exactly the repos this module manages — never `safe.directory = *`,
+    #    which would let the sandboxed bot trick root into running git
+    #    hooks. ──────────────────────────────────────────────────────────
+    environment.etc."gitconfig" = {
+      text = ''
+        [safe]
+          directory = ${cfg.repoDir}
+          directory = ${cfg.repoDir}/vendor/hermes-agent
+          directory = ${cfg.repoDir}/vendor/hermes-nicegui
+          directory = ${cfg.repoDir}/vendor/xaelWiki
+          ${lib.optionalString (config ? services.hermes-tools) "directory = ${config.services.hermes-tools.contentDir}"}
+      '';
+    };
+
+    # Make ${cfg.repoDir} a real git checkout the bot can edit and roll back
+    # against. scripts/deploy.sh rsyncs the working tree WITHOUT `.git` (the
+    # box keeps its own local ledger) and nothing on the box ever creates one
+    # — so the deploy/rollback git phases silently no-op (`|| true`), the bot
+    # has nowhere to commit, and hermes-status says "not a git repository".
+    # Runs on EVERY activation: re-claims ownership (operator rsyncs land as
+    # the build machine's uid, unknown on the box) and git-inits once.
+    #
+    # vendor/ IS tracked and hermes-owned like the rest of the tree — the bot
+    # edits vendored source there, and the ledger needs the resulting gitlink
+    # commits for `sync_repo_to_gen` (above) to be able to move vendor/*
+    # submodules back in step with a rolled-back generation. Only state/
+    # (root-owned rollback bookkeeping: last-known-good, gen-<N> tags apply to
+    # the whole repo so they're fine either way) is excluded — a `git reset
+    # --hard` must never touch root-owned files the bot can't write, and
+    # state/last-known-good must survive a reset that undoes everything else.
+    system.activationScripts.hermes-deploy-repo = lib.stringAfter [ "users" ] ''
+      mkdir -p ${cfg.repoDir}
+      chown ${config.services.hermes-agent.user}:${config.services.hermes-agent.group} ${cfg.repoDir}
+      find ${cfg.repoDir} -mindepth 1 \
+        -path ${cfg.repoDir}/state -prune -o \
+        -exec chown ${config.services.hermes-agent.user}:${config.services.hermes-agent.group} {} \;
+      if [ ! -d ${cfg.repoDir}/.git ]; then
+        echo "hermes-deploy: initialising git repo in ${cfg.repoDir}"
+        ${lib.getExe pkgs.git} -C ${cfg.repoDir} init -q
+        ${lib.getExe pkgs.git} -C ${cfg.repoDir} config user.name "hermes-deploy"
+        ${lib.getExe pkgs.git} -C ${cfg.repoDir} config user.email "hermes-deploy@localhost"
+        ${lib.getExe pkgs.git} -C ${cfg.repoDir} add -A 2>/dev/null || true
+        ${lib.getExe pkgs.git} -C ${cfg.repoDir} commit -q -m "initial import from operator deploy" 2>/dev/null || true
+      fi
+      # Ledger hygiene: state/ (root-owned rollback bookkeeping) must NOT be
+      # tracked, so a `git reset --hard` in sync_repo_to_gen never touches it.
+      grep -q '^state/$' ${cfg.repoDir}/.git/info/exclude 2>/dev/null \
+        || printf 'state/\n' >> ${cfg.repoDir}/.git/info/exclude
+      ${lib.getExe pkgs.git} -C ${cfg.repoDir} rm -r --cached state 2>/dev/null || true
+    '';
+
     systemd.services.hermes-deploy = {
       description = "Deploy Hermes from git and health-check (with auto-rollback)";
       wantedBy = [ ];
@@ -312,8 +465,22 @@ in
         '')
         (pkgs.writeShellScriptBin "hermes-status" ''
           echo "== git =="; git -C ${cfg.repoDir} log --oneline -5
+          echo "== vendor/ =="
+          git -C ${cfg.repoDir} submodule status --recursive 2>/dev/null || echo "(no submodules)"
           echo "== generations =="; nix-env -p /nix/var/nix/profiles/system --list-generations
           echo "== last-known-good =="; cat ${cfg.stateDir}/last-known-good 2>/dev/null || echo none
+          RUNNING_GEN=$(${currentGeneration})
+          RUNNING_TAG="gen-$RUNNING_GEN"
+          HEAD_COMMIT=$(git -C ${cfg.repoDir} rev-parse HEAD 2>/dev/null || echo unknown)
+          TAG_COMMIT=$(git -C ${cfg.repoDir} rev-parse "$RUNNING_TAG" 2>/dev/null || echo unknown)
+          if [ "$HEAD_COMMIT" = "$TAG_COMMIT" ]; then
+            echo "== drift == none: git HEAD matches the running generation ($RUNNING_TAG)"
+          else
+            echo "== drift == WARNING: git HEAD is ahead of/different from the running generation."
+            echo "  running generation $RUNNING_GEN was built from: $RUNNING_TAG -> $TAG_COMMIT"
+            echo "  git HEAD is currently at:                        $HEAD_COMMIT"
+            echo "  run hermes-deploy to build+switch to HEAD, or check what's pending with: git -C ${cfg.repoDir} log --oneline $RUNNING_TAG..HEAD"
+          fi
           echo "== service =="; systemctl status hermes-agent --no-pager
         '')
       ];

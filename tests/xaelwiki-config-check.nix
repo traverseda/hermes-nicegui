@@ -1,8 +1,9 @@
 # Fast, build-light verification of the xaelwiki wiring.
 #
 # Asserts that:
-#   * the xaelwiki service runs the EDITABLE submodule checkout (PYTHONPATH
-#     points at the run-location symlink) via the Nix python env,
+#   * the xaelwiki service runs the vendored source as an IMMUTABLE store path
+#     (PYTHONPATH points into /nix/store, not a live checkout) via the Nix
+#     python env,
 #   * the notes vault bootstrap installs the deploy key + clones the vault,
 #   * the exposure registry entry exists and is credential-enforced,
 #   * hermes-agent is wired to it as an MCP server with an env-interpolated
@@ -12,7 +13,11 @@
 #
 # Run with:  nix build .#checks.x86_64-linux.xaelwiki-config-check
 
-{ nixpkgs, hermes-agent }:
+{
+  nixpkgs,
+  hermes-agent,
+  xaelwiki-src,
+}:
 let
   system = "x86_64-linux";
   inherit (nixpkgs) lib;
@@ -22,6 +27,7 @@ let
     extra: disableSecrets:
     (lib.nixosSystem {
       inherit system;
+      specialArgs = { inherit xaelwiki-src; };
       modules = [
         hermes-agent.nixosModules.default
         ../modules/exposure.nix
@@ -72,6 +78,13 @@ let
       exit 1
     fi
   '';
+
+  mustNot = needle: file: ''
+    if grep -q -- ${lib.escapeShellArg needle} ${file}; then
+      echo "UNEXPECTED: ${needle} in ${file}" >&2
+      exit 1
+    fi
+  '';
 in
 pkgs.runCommand "xaelwiki-config-check"
   {
@@ -87,12 +100,13 @@ pkgs.runCommand "xaelwiki-config-check"
     cat $vaultUnit > vault.unit
     cat $vaultScript > vault.script
 
-    # ── service runs the EDITABLE checkout via the Nix python env ──────
+    # ── service runs the vendored source as an immutable store path ─────
     ${need "-m xaelwiki.server" "xaelwiki.unit"}
-    ${need "PYTHONPATH=/var/lib/xaelwiki/src/src" "xaelwiki.unit"}
+    ${need "PYTHONPATH=/nix/store/" "xaelwiki.unit"}
+    ${mustNot "/var/lib/xaelwiki/src" "xaelwiki.unit"}
     ${need "User=xaelwiki" "xaelwiki.unit"}
     ${need "ReadWritePaths=/var/lib/xaelwiki" "xaelwiki.unit"}
-    ${need "XAEL_READ_ONLY=0" "xaelwiki.unit"}            # editable by default
+    ${need "XAEL_READ_ONLY=0" "xaelwiki.unit"}            # notes are editable by default (not the server code)
 
     # ── vault bootstrap installs the deploy key + clones the notes ─────
     ${need "Type=oneshot" "vault.unit"}

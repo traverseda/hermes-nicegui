@@ -4,3 +4,6 @@
 [submodule "vendor/hermes-nicegui"]
 	path = vendor/hermes-nicegui
 	url = git@github.com:traverseda/hermes-nicegui.git
+[submodule "vendor/hermes-agent"]
+	path = vendor/hermes-agent
+	url = https://github.com/NousResearch/hermes-agent.git

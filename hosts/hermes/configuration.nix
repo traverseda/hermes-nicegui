@@ -207,16 +207,44 @@
     darkMode = true;
   };
 
-  # ── Nix ──────────────────────────────────────────────────────────────
+  # ── Bot is root ──────────────────────────────────────────────────────
+  # Hermes is a self-managing agent: give it root outright and let the
+  # ROLLBACK machinery (git ledger + generations + health-checked watchdog)
+  # be the safety net, not a permission gate. It is supposed to be hard for
+  # the bot to kill itself, but if it really wants to it will — and the
+  # operator's job is to keep the rollback path working, not to fence the bot
+  # off. Layered least-privilege (polkit unit whitelists, etc.) just added
+  # moving parts that broke in new ways and left the bot unable to fix
+  # ordinary problems (e.g. rotating its own secrets).
+  #
+  # Grant hermes passwordless sudo DIRECTLY rather than via %wheel: NixOS 26.11
+  # assigns wheel gid 1, which collides with the standard daemon group (also
+  # gid 1), and sudo can't match %wheel reliably under that collision.
+  security.sudo.extraRules = [
+    {
+      users = [ "hermes" ];
+      commands = [
+        {
+          command = "ALL";
+          options = [ "NOPASSWD" ];
+        }
+      ];
+    }
+  ];
+
   nix.settings = {
     experimental-features = [
       "nix-command"
       "flakes"
     ];
-    # Let the bot (via hermes user) and root trigger builds/rollbacks.
+    # The bot is a trusted nix user: it can build/switch/roll back directly
+    # (the hermes-deploy/hermes-rollback units remain the convenient wrappers,
+    # but are no longer the only path). Every system change still lands as a
+    # git commit + generation the watchdog can roll back.
     trusted-users = [
       "root"
       "@wheel"
+      "hermes"
     ];
     substituters = [ "https://cache.nixos.org" ];
     trusted-public-keys = [ "cache.nixos.org-1:6NCHdD59X431o0gWypbMrWURtJAfVcLI/QkGjRcUv6w=" ];
@@ -276,14 +304,34 @@
   # ── System ───────────────────────────────────────────────────────────
   system.stateVersion = "26.05";
 
-  system.activationScripts.hermes-repo-init = lib.stringAfter [ "users" ] ''
-    # The deploy machinery expects a copy of this flake here (no git remote —
-    # scripts/deploy.sh rsyncs it in on every deploy).
-    mkdir -p /var/lib/hermes-deploy
-    chmod 0755 /var/lib/hermes-deploy
-    if [ ! -d /var/lib/hermes-deploy/.git ]; then
-      echo "hermes: /var/lib/hermes-deploy is not a git repo."
-      echo "hermes: run scripts/deploy.sh from the build machine (it rsyncs the repo)."
-    fi
+  # configfs cannot be mounted in an unprivileged LXC, so the default
+  # sys-kernel-config.mount fails at every boot/switch. switch-to-configuration
+  # then returns non-zero, which makes EVERY nixos-rebuild switch "fail" —
+  # breaking deploy.sh AND the bot's own hermes-deploy.service. Override the
+  # unit to skip in containers (same behavior as the stock unit on a real
+  # host). Nothing on this box needs configfs.
+  systemd.units."sys-kernel-config.mount".text = ''
+    [Unit]
+    Description=Kernel Configuration File System
+    Documentation=https://docs.kernel.org/filesystems/configfs.html
+    Documentation=https://systemd.io/API_FILE_SYSTEMS
+    DefaultDependencies=no
+    ConditionVirtualization=!container
+    ConditionPathExists=/sys/kernel/config
+    ConditionCapability=CAP_SYS_RAWIO
+    Before=sysinit.target
+    Conflicts=umount.target
+    Before=umount.target
+    MounterImplicit=1
+
+    [Mount]
+    What=configfs
+    Where=/sys/kernel/config
+    Type=configfs
+    Options=defaults
   '';
+
+  # (The git-repo bootstrap for /var/lib/hermes-deploy lives in
+  # modules/hermes-deploy.nix — hermes-deploy-repo — so it is shared with the
+  # test VM and can't drift.)
 }

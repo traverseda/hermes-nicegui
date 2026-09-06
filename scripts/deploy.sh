@@ -23,7 +23,13 @@
 #   HERMES_HOST   ssh target (default: hermes@hermes.tailnet  / $HERMES_TAILSCALE_IP)
 set -euo pipefail
 
-HOST="${HERMES_HOST:-root@${HERMES_TAILSCALE_IP:-hermes}}"
+# Reach the box over the LAN (hermes.lan). The tailnet IP is NOT usable for
+# deploy: the box runs tailscale with `--ssh`, and the tailnet SSH policy
+# rejects every user on this node, so `root@hermes` (which resolves to the
+# tailnet IP) is refused. `root@hermes.lan` goes straight to the box's own
+# sshd, where the operator key from hosts/hermes/configuration.nix works.
+# Override with HERMES_HOST=<user@host> or HERMES_TAILSCALE_IP=<ip>.
+HOST="${HERMES_HOST:-root@${HERMES_TAILSCALE_IP:-hermes.lan}}"
 SNAPSHOT=false
 CHECK=true
 
@@ -60,8 +66,18 @@ echo "== syncing flake repo to $HOST:/var/lib/hermes-deploy (no remote; rsync is
 # hermes-deploy.service / hermes-rollback.service operate on the same source
 # that this deploy activated. Exclusions:
 #   .git           the LXC keeps its own local ledger (bot commits / rollbacks)
-#   vendor/        editable submodules on the LXC must survive (their own repos)
-#   state/         deploy bookkeeping (last-known-good) lives here
+#   vendor/        vendor/* submodules are excluded so a routine deploy from
+#                  this machine never clobbers box-side commits the bot made
+#                  directly on the LXC (its own vendor/hermes-agent edits,
+#                  its own flake.lock bump) with this machine's possibly-older
+#                  copy. This machine's `nixos-rebuild switch --target-host`
+#                  above still builds from ITS OWN vendor/* + flake.lock —
+#                  this exclusion only protects the box's local ledger copy
+#                  used by hermes-deploy.service for the bot's own deploys.
+#                  If you edited vendor/* on THIS machine and want it synced,
+#                  drop this exclude for one run.
+#   state/         deploy bookkeeping (last-known-good, gen-<N> tags live in
+#                  the ledger's refs, not here) lives here
 #   result*, *.qcow2  build artifacts
 #   secrets/lxc-host-ed25519  the LXC's own host key (gitignored; never re-copy)
 rsync -a --delete \

@@ -72,10 +72,16 @@ let
     install -m 0755 ${hermesTool} $out/bin/hermes-tool
   '';
 
+  # Activation scripts run with a PATH that has NO git (only coreutils,
+  # gnused, ...), so any git call there must use an absolute store path. The
+  # hermes-content-commit systemd service sets its own `path = [ git ]`, so
+  # it can keep calling bare `git` — but the activation snippet below cannot.
+  gitBin = "${lib.getExe pkgs.git}";
+
   # Identity used for content-store auto-commits (repo-local git config).
   gitIdentity = ''
-    git -C ${contentDir} config user.name "hermes-content"
-    git -C ${contentDir} config user.email "hermes-content@localhost"
+    ${gitBin} -C ${contentDir} config user.name "hermes-content"
+    ${gitBin} -C ${contentDir} config user.email "hermes-content@localhost"
   '';
 in
 {
@@ -103,30 +109,33 @@ in
     # ── Content store: init git repo, symlink skills, self-heal ─────────
     # Runs on every activation so a deleted/wiped store self-heals back to an
     # empty-but-working repo with a fresh content-good tag.
-    system.activationScripts."hermes-content-store" = lib.stringAfter [
-      "hermes-agent-setup"
-      "hermes-skills-setup"
-    ] ''
-      mkdir -p ${contentDir}/skills ${contentDir}/bin
-      chown -R ${agentCfg.user}:${agentCfg.group} ${contentDir}
-      if [ ! -d ${contentDir}/.git ]; then
-        echo "hermes-tools: initialising content store at ${contentDir}"
-        git -C ${contentDir} init -q
-        ${gitIdentity}
-        git -C ${contentDir} add -A
-        git -C ${contentDir} commit -q -m "init content store" || true
-        git -C ${contentDir} tag ${goodTag} || true
-      fi
-      # Link $HERMES_HOME/skills -> content/skills so authored skills are
-      # git-backed AND picked up by hermes next session (no restart).
-      if [ -e ${hermesHome}/skills ] && [ ! -L ${hermesHome}/skills ]; then
-        echo "hermes-tools: folding existing ${hermesHome}/skills into the content store"
-        cp -a ${hermesHome}/skills/. ${contentDir}/skills/ 2>/dev/null || true
-        rm -rf ${hermesHome}/skills
-      fi
-      ln -sfn ${contentDir}/skills ${hermesHome}/skills
-      chown -h ${agentCfg.user}:${agentCfg.group} ${hermesHome}/skills
-    '';
+    system.activationScripts."hermes-content-store" =
+      lib.stringAfter
+        [
+          "hermes-agent-setup"
+          "hermes-skills-setup"
+        ]
+        ''
+          mkdir -p ${contentDir}/skills ${contentDir}/bin
+          chown -R ${agentCfg.user}:${agentCfg.group} ${contentDir}
+          if [ ! -d ${contentDir}/.git ]; then
+            echo "hermes-tools: initialising content store at ${contentDir}"
+            ${gitBin} -C ${contentDir} init -q
+            ${gitIdentity}
+            ${gitBin} -C ${contentDir} add -A
+            ${gitBin} -C ${contentDir} commit -q -m "init content store" || true
+            ${gitBin} -C ${contentDir} tag ${goodTag} || true
+          fi
+          # Link $HERMES_HOME/skills -> content/skills so authored skills are
+          # git-backed AND picked up by hermes next session (no restart).
+          if [ -e ${hermesHome}/skills ] && [ ! -L ${hermesHome}/skills ]; then
+            echo "hermes-tools: folding existing ${hermesHome}/skills into the content store"
+            cp -a ${hermesHome}/skills/. ${contentDir}/skills/ 2>/dev/null || true
+            rm -rf ${hermesHome}/skills
+          fi
+          ln -sfn ${contentDir}/skills ${hermesHome}/skills
+          chown -h ${agentCfg.user}:${agentCfg.group} ${hermesHome}/skills
+        '';
 
     # ── hermes-tool on PATH for the agent (gateway service) and operator ──
     services.hermes-agent.extraPackages = [ hermesToolPackage ];

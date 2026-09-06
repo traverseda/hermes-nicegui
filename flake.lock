@@ -80,16 +80,30 @@
       "locked": {
         "lastModified": 1786745321,
         "narHash": "sha256-540VMYgn5pORae6UTNdMi7BCQJNkEP26t+2msAIl8os=",
-        "owner": "NousResearch",
-        "repo": "hermes-agent",
         "rev": "802a60a1502da137c4084d0e383dcab95735ccf2",
-        "type": "github"
+        "revCount": 22407,
+        "type": "git",
+        "url": "file:./vendor/hermes-agent"
       },
       "original": {
-        "owner": "NousResearch",
-        "repo": "hermes-agent",
-        "rev": "802a60a1502da137c4084d0e383dcab95735ccf2",
-        "type": "github"
+        "type": "git",
+        "url": "file:./vendor/hermes-agent"
+      }
+    },
+    "hermes-nicegui-src": {
+      "flake": false,
+      "locked": {
+        "lastModified": 1786747489,
+        "narHash": "sha256-03eZ2ddvGQwocMxnHTHVxhXf1B0S8KgYKFYuFBbS4/Q=",
+        "ref": "refs/heads/main",
+        "rev": "bdacd8ec0204110b379021dbeadd62e90e822a8a",
+        "revCount": 7,
+        "type": "git",
+        "url": "file:./vendor/hermes-nicegui"
+      },
+      "original": {
+        "type": "git",
+        "url": "file:./vendor/hermes-nicegui"
       }
     },
     "home-manager": {
@@ -204,7 +218,9 @@
       "inputs": {
         "agenix": "agenix",
         "hermes-agent": "hermes-agent",
-        "nixpkgs": "nixpkgs"
+        "hermes-nicegui-src": "hermes-nicegui-src",
+        "nixpkgs": "nixpkgs",
+        "xaelwiki-src": "xaelwiki-src"
       }
     },
     "systems": {
@@ -245,6 +261,22 @@
         "owner": "pyproject-nix",
         "repo": "uv2nix",
         "type": "github"
+      }
+    },
+    "xaelwiki-src": {
+      "flake": false,
+      "locked": {
+        "lastModified": 1786550284,
+        "narHash": "sha256-XH/jle0FMUneujCnSPPqs/Yec7ADruDQwkwlzOB3eIA=",
+        "ref": "refs/heads/main",
+        "rev": "887a93054f535a8d18688960253833839fcac28d",
+        "revCount": 15,
+        "type": "git",
+        "url": "file:./vendor/xaelWiki"
+      },
+      "original": {
+        "type": "git",
+        "url": "file:./vendor/xaelWiki"
       }
     }
   },

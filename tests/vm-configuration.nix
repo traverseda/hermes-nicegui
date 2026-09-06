@@ -38,31 +38,11 @@
   services.hermes-deploy.gracePeriod = 30;
 
   # The real box has the flake copied into /var/lib/hermes-deploy; the VM
-  # starts empty. Give the deploy/rollback machinery a real local git repo
-  # (two commits on `main`, HEAD at the newest — no remote, matching the
-  # production design) so the git phases are actually exercised instead of
-  # dying on `git: command not found`. Runs as a systemd service, not an
-  # activation script: activation runs from the initrd where git is not on
-  # PATH.
-  systemd.services.hermes-git-repo = {
-    description = "Test fixture: bootstrap a git repo in /var/lib/hermes-deploy";
-    wantedBy = [ "multi-user.target" ];
-    path = with pkgs; [ git ];
-    serviceConfig = {
-      Type = "oneshot";
-      RemainAfterExit = true;
-    };
-    script = ''
-      if [ ! -d /var/lib/hermes-deploy/.git ]; then
-        git init -q /var/lib/hermes-deploy
-        git -C /var/lib/hermes-deploy config user.email test@example.com
-        git -C /var/lib/hermes-deploy config user.name test
-        git -C /var/lib/hermes-deploy checkout -q -b main
-        git -C /var/lib/hermes-deploy commit -q --allow-empty -m "gen 1"
-        git -C /var/lib/hermes-deploy commit -q --allow-empty -m "gen 2"
-      fi
-    '';
-  };
+  # starts empty. The deploy/rollback git repo is bootstrapped in BOTH the VM
+  # and the box by the production `hermes-deploy-repo` activation snippet
+  # (modules/hermes-deploy.nix), so there is no VM-specific fixture here.
+  # The integration test seeds commits on top of that empty repo to exercise
+  # the git phases.
 
   # Tailscale needs a working /dev/net/tun and an auth key in the VM; skip
   # it there.

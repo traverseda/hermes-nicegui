@@ -38,18 +38,23 @@ one of those paths is routed through a mechanism that can be undone:
 4. **Proxmox snapshots** — `scripts/deploy.sh --snapshot` snapshots the CT
    before deploying, giving you a full-disk escape hatch independent of Nix.
 
-### What the bot can't do
+### The bot is root
 
-Hermes runs in **native mode** (hardened systemd unit, `NoNewPrivileges`,
-`ProtectSystem=strict`). It cannot `apt`/`pip`/`npm`-install itself — the only
-tools on its PATH are the ones declared in `modules/hermes-service.nix`. To
-gain a **system** capability (a new package, daemon, firewall rule, secret),
-the bot must edit the flake → git → new generation — that's what makes system
-self-change rollback-safe. **Content** (skills, scripts, MCP servers) does NOT
-need the flake: it goes through the git-backed content store below, which has
-its own mechanical rollback. (If you want a mode where the bot *can* install
-packages, flip `services.hermes-agent.container.enable = true` for an isolated
-Ubuntu container — documented upstream.)
+Hermes is a self-managing agent: the `hermes` user has passwordless sudo
+(direct sudoers rule, not `%wheel` — NixOS 26.11 gives wheel and daemon the
+same gid 1) and is a nix `trusted-user`. The agent service sandbox that would
+have vetoed that is relaxed: `NoNewPrivileges` and `ProtectSystem` are off (a
+`NoNewPrivs: 1` process cannot setuid, so the sudo grant was dead until they
+went), and `/run/wrappers/bin` (the setuid `sudo`) is on the service PATH. The
+bot can install packages, rotate its own secrets (the `age` tooling is on its
+PATH), and rebuild the system itself. **The safety net is the rollback
+machinery, not a permission gate** — every system change it makes lands as a
+git commit + new generation that the health-checked watchdog can roll back. It
+is supposed to be hard for the bot to kill itself, but if it really wants to it
+will; keep the rollback path working (git ledger, generations, watchdog)
+rather than trying to fence the bot off. **Content** (skills, scripts, MCP
+servers) still goes through the git-backed content store below, which has its
+own mechanical rollback.
 
 ## Two change lanes: content vs system
 
@@ -60,11 +65,18 @@ and slow. So there are two lanes:
 
 | | System lane (Nix) | Content lane (`hermes-tool`) |
 |---|---|---|
-| What changes | gateway unit, packages, firewall, secrets, daemons | skills, tool scripts, MCP servers, config.yaml |
+| What changes | gateway unit, packages, firewall, secrets, daemons, AND vendored source (`vendor/hermes-agent`, `vendor/hermes-nicegui`, `vendor/xaelWiki` — the bot's own runtime and in-process plugins) | skills, tool scripts, MCP servers, config.yaml |
 | How it ships | flake edit → `nixos-rebuild switch` → generation | `hermes-tool` → auto-commit → git |
-| Rollback | `hermes-rollback` (one generation) | `hermes-tool revert` (to `content-good`) |
+| Rollback | `hermes-rollback` (one generation; also resets vendor/* submodules to match — see "Editing vendored source" below) | `hermes-tool revert` (to `content-good`) |
 | Restart cost | full gateway restart | skills: none · bin: none · MCP: gateway restart only |
-| Owner | this flake repo | `/var/lib/hermes/content` (own git repo) |
+| Owner | this flake repo (+ vendor/* submodules) | `/var/lib/hermes/content` (own git repo) |
+
+Vendored source is real, in-process code — a bad edit there can break the
+gateway just as badly as a bad Nix config change — so it's deliberately in the
+system lane, not content lane, even though the bot writes it directly. There's
+no "restart to try it" shortcut: every change goes through the full
+commit → rebuild → health-check → rollback pipeline. See "Editing vendored
+source" below.
 
 - **Skills** land in `$HERMES_HOME/skills` (symlinked from the store) and are
   picked up next session — no restart. **Tool scripts** are appended to the
@@ -91,7 +103,7 @@ The one rule that keeps this safe: **verify, then `hermes-tool mark-good`**.
 ## Repository layout
 
 ```
-flake.nix                        # inputs: nixpkgs, hermes-agent, agenix
+flake.nix                        # inputs: nixpkgs, hermes-agent, hermes-nicegui-src, xaelwiki-src, agenix
 hosts/hermes/configuration.nix   # Proxmox LXC host config
 modules/hermes-service.nix       # hermes-agent + tailscale (shared w/ tests)
 modules/hermes-skills.nix        # vendored skills wiring (no bundled skills)
@@ -102,12 +114,13 @@ modules/hermes-dashboard.nix     # web dashboard (hermesagent.lan:9119)
 modules/hindsight.nix            # Hindsight memory service (podman, tailnet-only)
 modules/exposure.nix             # tailnet-exposure registry (auth enforced)
 modules/cloudflare-tunnel.nix    # public exposure via Cloudflare Tunnel (outbound-only)
-modules/xaelwiki.nix             # xaelwiki notes MCP server (editable, low-stakes)
-modules/hermes-nicegui.nix       # hermes-nicegui web UI (submodule, tunnel-public)
+modules/xaelwiki.nix             # xaelwiki notes MCP server (vendored source, tunnel-public)
+modules/hermes-nicegui.nix       # hermes-nicegui web UI (vendored source, tunnel-public)
 modules/llm.nix                  # generic preferred-model config (hermesDeploy.llm)
 skills/                          # curated, NixOS-corrected skills (external_dirs)
-vendor/xaelWiki/                 # xaelwiki source (git submodule, editable on the LXC)
-vendor/hermes-nicegui/           # hermes-nicegui source (git submodule, editable on the LXC)
+vendor/hermes-agent/             # hermes-agent source (git submodule, system lane — see README)
+vendor/xaelWiki/                 # xaelwiki source (git submodule, system lane — see README)
+vendor/hermes-nicegui/           # hermes-nicegui source (git submodule, system lane — see README)
 tests/vm-configuration.nix       # local test VM config
 tests/hermes-test.nix            # NixOS integration test (runtime; slow)
 tests/hermes-config-check.nix    # fast eval-time deploy/rollback wiring check
@@ -121,8 +134,6 @@ scripts/rollback.sh              # step back one generation
 scripts/hermes-tool.sh           # content-store CLI source (built by hermes-tools.nix)
 scripts/test.sh                  # nix flake check / local VM / integration test
 scripts/import-proxmox.sh        # build & import the LXC image into Proxmox
-scripts/patch-hermes.sh          # rebuild the hermes-agent fork w/ local patches
-patches/                         # local hermes source patches (see patches/README.md)
 secrets/                         # agenix encrypted secrets (see secrets/README.md)
 ```
 
@@ -147,6 +158,15 @@ starts it. It also enables `nesting=1` in case you later opt into Hermes
 container mode.
 
 ### 3. First-boot setup
+
+> **How to reach the box (recurring gotcha — read this every time):**
+> `root@hermes.lan` (192.168.0.151) goes straight to the box's own sshd and
+> accepts the operator key from `hosts/hermes/configuration.nix`. The tailnet
+> IP (`root@hermes`, `100.123.226.74`) does **NOT** work: the box runs
+> tailscale with `--ssh` and the tailnet SSH policy rejects every user on this
+> node, so `ssh root@hermes` is refused. Deploy scripts default to
+> `root@hermes.lan` for exactly this reason; override with `HERMES_HOST` or
+> `HERMES_TAILSCALE_IP` if your box has a different address.
 
 ```sh
 ssh root@<ct-ip>
@@ -179,10 +199,20 @@ scripts/rollback.sh               # step back one generation
 On the LXC itself, the bot can run: `hermes-deploy`, `hermes-rollback`,
 `hermes-status`.
 
+The repo on the box (`/var/lib/hermes-deploy`) is made into a real git
+checkout by the `hermes-deploy-repo` activation snippet on every switch: it
+`git init`s if needed and re-chowns the tree to the `hermes` user (operator
+rsyncs land as the build machine's uid, which the box can't even resolve).
+Without that snippet the box-side git phases silently no-op and rollback is a
+lie — this has shipped broken before, which is why `hermes-config-check`
+asserts the snippet exists.
+
 ## Making changes
 
 Edit the flake, commit, and deploy. That's the whole loop — and it's the same
-loop whether the change comes from a human or from the bot:
+loop whether the change comes from a human or from the bot. See
+[MERGE_CRITERIA.md](MERGE_CRITERIA.md) for the test a change should pass
+before it lands:
 
 ```sh
 git add -A && git commit -m "hermes: add skill for <thing>"
@@ -190,46 +220,58 @@ scripts/deploy.sh      # rsyncs the repo to the LXC, builds, activates
 ```
 
 On the LXC (what the bot does): edit `/var/lib/hermes-deploy`, commit locally,
-then `hermes-deploy` (rebuilds from that checkout). `hermes-rollback` steps the
-local repo back one commit and rolls back one generation.
+then `hermes-deploy` (rebuilds from that checkout). `hermes-rollback` rolls
+back one generation, and now also resets the outer repo — and every vendor/*
+submodule inside it — to match (see "Editing vendored source" below).
 
 If the gateway breaks, the watchdog notices within minutes and steps back one
 generation. If it breaks during the deploy, the deploy itself rolls back.
+Every rollback path tags-and-syncs the git ledger together with the Nix
+generation, so `vendor/hermes-agent` et al. always match what's actually
+running — run `hermes-status` any time to check for drift between `git HEAD`
+and the running generation.
 
-## Patching Hermes
+## Editing vendored source (hermes-agent / hermes-nicegui / xaelWiki)
 
-Local source patches to hermes-agent's own code (core fixes *or* additive
-features) ship through a **fork**: the patch *content* lives in `patches/`
-(this repo, rollback-safe), and `scripts/patch-hermes.sh` applies it onto the
-pinned upstream rev (`patches/upstream.lock`), pushes the fork's `patched`
-branch, points `flake.nix` at the fork, and re-locks. See `patches/README.md`.
+`vendor/hermes-agent`, `vendor/hermes-nicegui`, and `vendor/xaelWiki` are git
+submodules — this is the bot's own core runtime and the plugins that run
+in-process with it, so it's **system lane, not content lane**: no live
+editing, no restart-to-apply. A change requires the full commit → rebuild →
+rollback-safe pipeline, same as any other system-lane change:
 
 ```sh
-# produce a diff against the pinned rev, save as patches/00-my-fix.patch
-HERMES_FORK=github:you/hermes-agent \
-HERMES_FORK_REMOTE=git@github.com:you/hermes-agent.git \
-  scripts/patch-hermes.sh --dry-run      # verify without pushing
-HERMES_FORK=github:you/hermes-agent \
-HERMES_FORK_REMOTE=git@github.com:you/hermes-agent.git \
-  scripts/patch-hermes.sh --build        # push fork, relock, verify build
-git add patches/ flake.nix flake.lock && git commit -m "hermes: apply local patch"
-scripts/deploy.sh
+cd vendor/hermes-agent
+# ...edit files...
+git add -A && git commit -m "fix: <whatever>"     # commit INSIDE the submodule first —
+cd ../..                                          # an uncommitted edit is invisible to the next step
+nix flake lock --update-input hermes-agent        # bumps flake.lock to the new submodule commit
+git add vendor/hermes-agent flake.lock
+git commit -m "hermes-agent: fix <whatever>"
+scripts/deploy.sh                                 # or hermes-deploy on the LXC
 ```
 
-Rollback: `git revert` the commit that bumped `flake.nix`/`flake.lock`, then
-`scripts/deploy.sh`. Drop a patch: delete its `.patch` and re-run
-`patch-hermes.sh`. Update upstream: `patch-hermes.sh --update-upstream <rev>`.
+Same for `hermes-nicegui-src` / `xaelwiki-src` (the flake inputs for
+`vendor/hermes-nicegui` / `vendor/xaelWiki`).
+
+**Why this shape:** each vendored submodule commit only ships once `flake.lock`
+is updated to point at it, and every deploy commit is tagged `gen-<N>` after a
+switch. Any rollback (deploy-time auto-rollback, `hermes-rollback`, or the
+watchdog) resets `flake.lock` — and runs `git submodule update` — back to the
+tag for the generation it's restoring, so a bad self-edit to `vendor/hermes-agent`
+is undone exactly as reliably as a bad Nix config change. The submodule commit
+that introduced the bug isn't deleted — it stays in that submodule's own
+history — it's just no longer checked out or built.
 
 ## Notes
 
-- **Pin your inputs.** `hermes-agent` is pinned to a specific rev in
-  `flake.nix` — the project is best-effort and `main` can break the module.
-  Update deliberately: `nix flake lock --update-input hermes-agent`. If you
-  carry local patches, the input is your fork's `patched` branch instead — see
-  [Patching Hermes](#patching-hermes).
+- **Pin your inputs.** `hermes-agent`, `hermes-nicegui-src`, and
+  `xaelwiki-src` are pinned to specific commits of their vendor/* submodules in
+  `flake.lock` — see "Editing vendored source" above for how to move that pin.
+  `nixpkgs`/`agenix` are pinned the normal flake-input way; update deliberately
+  with `nix flake lock --update-input <name>`.
 - **Secrets never go in Nix config.** Use agenix (`secrets/README.md`).
-- **`nix flake update`** bumps nixpkgs/hermes-agent/agenix to latest locks —
-  treat this as a normal deploy and let the watchdog validate it.
+- **`nix flake update`** bumps nixpkgs/agenix to latest locks — treat this as
+  a normal deploy and let the watchdog validate it.
 
 ## Hindsight memory service
 
@@ -332,15 +374,16 @@ cron/chat all see the real agent state.
   behind a username/password admin account (created on first visit). That
   single login is the only thing between the public tunnel and a file browser
   + terminal, so keep it on.
-- **Editable source, no rebuild.** Code ships as the `vendor/hermes-nicegui`
-  git submodule and is symlinked into `/var/lib/hermes-nicegui/src`; edit it
-  on the LXC and `systemctl restart hermes-nicegui` — no `nixos-rebuild`. A
-  broken UI only takes down the UI, never the agent. Roll it back with
-  `git -C /var/lib/hermes-deploy/vendor/hermes-nicegui checkout <good-rev>`.
+- **Vendored source, system lane.** Code ships as the `vendor/hermes-nicegui`
+  git submodule (via the `hermes-nicegui-src` flake input) and is built into
+  the store — no live editing, `nixos-rebuild switch` required to apply a
+  change. See "Editing vendored source" above. A broken UI only takes down the
+  UI, never the agent, but rollback still goes through the same generation +
+  submodule-sync machinery as everything else in the system lane.
 - **Plugins work without a pip install.** The built-in plugins are discovered
   through an `importlib.metadata` entry-point group; the module ships a
-  generated `dist-info` on `PYTHONPATH` next to the live checkout so they
-  resolve against the editable source.
+  generated `dist-info` on `PYTHONPATH` next to the built app source so they
+  resolve correctly.
 - **Kanban needs dashboard creds.** The kanban plugin logs into the Hermes
   dashboard web server with the *plaintext* username/password — the
   `dashboard-env` secret only has the scrypt hash, so the plaintext lives in a
@@ -410,25 +453,23 @@ registry above is untouched. `services.cloudflare-tunnel` (in
   new `cfut_…` into `secrets/cloudflare-tunnel.age` (see `secrets/README.md`),
   and redeploy.
 
-## xaelwiki notes MCP server (editable, low-stakes)
+## xaelwiki notes MCP server
 
 `services.xaelwiki` runs the [xaelwiki](https://github.com/traverseda/xaelWiki)
 notes MCP server as a tailnet-only HTTP service, wired into the hermes agent as
 an MCP server so the agent can search, capture, and **edit** shared markdown
-notes. It is designed to be **fast to iterate on and independently revertible**
-— it is explicitly non-critical:
+notes. The *notes themselves* are fast to iterate on and independently
+revertible; the *server code* is not — it's a network-facing service with
+write access to the vault, so it gets the same system-lane treatment as
+hermes-agent and hermes-nicegui:
 
-- **Editable source, no rebuild.** xaelwiki's code ships as a git **submodule**
-  (`vendor/xaelWiki/`) and the service runs the checkout directly from a Nix
-  python env (`PYTHONPATH` points at the run-location symlink). Edit
-  `vendor/xaelWiki/src/xaelwiki/*.py` on the LXC, then
-  `systemctl restart xaelwiki` — no `nixos-rebuild`. A broken xaelwiki only
-  takes down notes, never the agent.
-- **Roll back separately.** The submodule is its own git repo. Roll it back
-  with `git -C /var/lib/hermes-deploy/vendor/xaelWiki checkout <good-rev>` (or
-  `git revert`), independent of Nix generations. The deploy flow runs
-  `git submodule update --init` (never `--force`), so local edits survive
-  deploys.
+- **Vendored source, system lane.** xaelwiki's server code ships as a git
+  **submodule** (`vendor/xaelWiki/`, via the `xaelwiki-src` flake input) and is
+  built into the store — no live editing. A change needs a commit inside the
+  submodule, `nix flake lock --update-input xaelwiki-src`, and a
+  `nixos-rebuild switch`; see "Editing vendored source" above. A broken
+  xaelwiki only takes down notes, never the agent, but rollback goes through
+  the same generation + submodule-sync machinery as everything else.
 - **Shared notes vault.** Notes live in their own git repo, cloned from
   `ssh://git@codeberg.org/traverseda/notes.git` with a dedicated SSH deploy key
   (`xaelwiki-ssh` secret). The server auto-pulls before each mutation and

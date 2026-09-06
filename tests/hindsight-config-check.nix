@@ -112,12 +112,23 @@ pkgs.runCommand "hindsight-config-check"
 
     # The oneshot script (executed on a real box) carries the code config.
     ${need "banks=\"code\"" "oneshot.script"}
-    ${need "\"retain_extraction_mode\":\"verbatim\"" "oneshot.script"}
-    ${need "\"retain_chunk_size\":800" "oneshot.script"}
-    ${need "\"retain_mission\"" "oneshot.script"}
-    ${need "\"observations_mission\"" "oneshot.script"}
-    ${need "\"enable_auto_consolidation\":true" "oneshot.script"}
     ${need "/health" "oneshot.script"}
+    # The retain_mission prose contains apostrophes, which would break
+    # shell `-d '...'` quoting — the JSON MUST be passed from a file
+    # (regression guard for the "Could not resolve host: preferences" curl
+    # word-splitting).
+    ${need "-d @/nix/store/" "oneshot.script"}
+    ${need "HINDSIGHT_API_TENANT_API_KEY:?" "oneshot.script"}
+
+    # ...and the JSON payload file carries the actual code-config fields.
+    config_json=$(grep -o '/nix/store/[^ ]*hindsight-code-bank-config.json' oneshot.script | head -n1)
+    test -n "$config_json" || { echo "MISSING: code-bank config JSON path in oneshot.script" >&2; exit 1; }
+    cp "$config_json" config.json
+    ${need "\"retain_extraction_mode\":\"verbatim\"" "config.json"}
+    ${need "\"retain_chunk_size\":800" "config.json"}
+    ${need "\"retain_mission\"" "config.json"}
+    ${need "\"observations_mission\"" "config.json"}
+    ${need "\"enable_auto_consolidation\":true" "config.json"}
 
     touch "$out"
     echo "hindsight-config-check passed"
