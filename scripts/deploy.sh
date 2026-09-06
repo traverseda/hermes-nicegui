@@ -70,13 +70,14 @@ echo "== syncing flake repo to $HOST:/var/lib/hermes-deploy (no remote; rsync is
 # hermes-deploy.service / hermes-rollback.service operate on the same source
 # that this deploy activated. Exclusions:
 #   .git           the LXC keeps its own local ledger (bot commits / rollbacks)
-#   vendor/        editable submodules on the LXC must survive (their own repos)
 #   state/         deploy bookkeeping (last-known-good) lives here
 #   result*, *.qcow2  build artifacts
 #   secrets/lxc-host-ed25519  the LXC's own host key (gitignored; never re-copy)
+# NOTE: vendor/ IS synced — it's system-lane source code, not content-lane.
+#       Each submodule's .git file is a harmless pointer to the parent repo's
+#       git data; rsync excludes the parent's .git/ at the root.
 rsync -a --delete \
   --exclude '/.git/' \
-  --exclude '/vendor/' \
   --exclude '/state/' \
   --exclude '/result' \
   --exclude '/result-*' \
