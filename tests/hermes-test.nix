@@ -28,8 +28,7 @@ pkgs.testers.runNixOSTest {
     # A predictable stateDir with a writable pidfile location.
     services.hermes-agent.stateDir = "/var/lib/hermes";
 
-    # Don't let the watchdog's periodic timer interfere with assertions.
-    services.hermes-deploy.watchdogInterval = "1h";
+    # Watchdog is now one-shot (runs once at boot), not periodic.
   };
 
   testScript = ''

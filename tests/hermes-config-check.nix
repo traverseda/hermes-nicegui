@@ -20,7 +20,7 @@ let
         hermes-agent.nixosModules.default
         (import ./vm-configuration.nix)
         {
-          # Mirror the VM integration test's long watchdog interval.
+          # Deprecated: watchdog runs once at boot, not periodically.
           services.hermes-deploy.watchdogInterval = "1h";
         }
       ];
@@ -127,8 +127,8 @@ pkgs.runCommand "hermes-config-check"
     # a latent bug in an earlier version of this module (asserted here as a
     # MUST-HAVE); regression guard for it staying gone.
     ${mustNot "Requires=hermes-agent.service" "watchdog.unit"}
-    ${need "OnBootSec=10min" "watchdog.timer"}
-    ${need "OnUnitActiveSec=1h" "watchdog.timer"}   # vm-configuration overrides
+    ${need "OnBootSec=60sec" "watchdog.timer"}
+    # Watchdog runs once at boot — no OnUnitActiveSec (not periodic).
 
     # ── scripts carry the rollback-safety logic ────────────────────────
     ${need "nixos-rebuild switch" "deploy.script"}

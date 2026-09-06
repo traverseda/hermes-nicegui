@@ -167,8 +167,8 @@ let
     PREV_GEN=$(${currentGeneration})
     log "previous generation: $PREV_GEN"
 
-    log "building & switching generation"
-    nixos-rebuild switch --flake "${cfg.repoDir}#${cfg.flakeAttr}" 2>&1 \
+    log "building & switching generation (max-jobs ${toString cfg.maxJobs}, cores ${toString cfg.cores})"
+    nixos-rebuild switch --max-jobs ${toString cfg.maxJobs} --cores ${toString cfg.cores} --flake "${cfg.repoDir}#${cfg.flakeAttr}" 2>&1 \
       | tee -a /var/log/hermes-deploy.log
 
     CUR_GEN=$(${currentGeneration})
@@ -484,6 +484,7 @@ in
         Type = "oneshot";
         ExecStart = deployScript;
         TimeoutStartSec = 0;
+        MemoryMax = cfg.switchMemoryMax;
       };
     };
 
@@ -495,6 +496,7 @@ in
         Type = "oneshot";
         ExecStart = rollbackScript;
         TimeoutStartSec = 0;
+        MemoryMax = cfg.switchMemoryMax;
       };
     };
 
@@ -506,6 +508,7 @@ in
         Type = "oneshot";
         ExecStart = watchdogScript;
         TimeoutStartSec = 0;
+        MemoryMax = cfg.switchMemoryMax;
       };
     };
 

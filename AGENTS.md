@@ -22,7 +22,7 @@ modules/cloudflare-tunnel.nix    # public exposure via Cloudflare Tunnel
 modules/xaelwiki.nix             # xaelwiki notes MCP server
 modules/llm.nix                  # model config shared W/ all services
 vendor/                          # git submodules: hermes-agent, hermes-nicegui, xaelWiki
-scripts/deploy.sh                # build + rsync + switch + health check -> LXC
+scripts/deploy.sh                # build locally, push closure, activate LXC
 scripts/rollback.sh              # step back one generation + git reset
 scripts/test.sh                  # nix flake check | vm | test
 scripts/hermes-tool.sh           # content-lane CLI (skills, tools, MCP servers)
@@ -55,9 +55,8 @@ nix flake check               # build + all *-config-check tests (fast eval-time
 nix run .#hermes-vm           # boot local test VM (same modules, no proxmox)
 scripts/test.sh check         # same as nix flake check
 scripts/test.sh vm            # same as nix run .#hermes-vm
-scripts/deploy.sh             # rsync + nixos-rebuild switch + watchdog health check
-scripts/deploy.sh --snapshot  # also snapshot the Proxmox CT first (need PROXMOX_CT env)
-scripts/rollback.sh           # step back one generation + git (need HERMES_HOST or default)
+scripts/deploy.sh [--dry-run] # build locally, push closure, activate LXC (needs zerotier)
+scripts/rollback.sh           # step back one generation + git reset
 scripts/patch-hermes.sh --dry-run    # verify patches without pushing (see patches/README.md)
 ```
 
@@ -81,19 +80,62 @@ Same pattern for `vendor/hermes-nicegui` (input: `hermes-nicegui-src`) and
 `vendor/xaelWiki` (input: `xaelwiki-src`). An uncommitted submodule edit is
 invisible to the build — this has shipped broken before.
 
-## SSH access gotcha
+## SSH access & deploy host
 
-`root@hermes.lan` (192.168.0.151) connects to the box's own sshd.
+`root@hermes.lan` (zerotier — resolves via zerotier DNS) or `root@192.168.193.158` (zerotier IP) both connect to the box's SSH daemon.
 `root@hermes` (100.123.226.74, tailnet IP) does NOT work: tailscale runs
 `--ssh` and the policy rejects every user on this node. Deploy scripts default
-to `root@hermes.lan`. Override with `HERMES_HOST` or `HERMES_TAILSCALE_IP`.
+to `root@192.168.193.158`. Override with `HERMES_HOST`.
 
-## Deploy script details
+## Deploy flows
 
-`scripts/deploy.sh` rsyncs to the LXC excluding: `.git/`, `vendor/`, `state/`,
-`result*`, `*.qcow2`. The build machine is the source of truth — no git remote
-on the LXC. Deploy aborts with exit 42 if the box has less than 2048 MB free
-(headroom = MemAvailable + SwapFree); bypass with `--force-memory-gate`.
+### From azrael (build machine)
+
+```sh
+HERMES_HOST=root@hermes.lan scripts/deploy.sh [--dry-run] [--snapshot]
+```
+
+1. Optional Proxmox snapshot (`--snapshot`, requires `PROXMOX_CT`)
+2. Memory gate — checks hermes has ≥2048 MB headroom (MemAvailable + SwapFree), exit 42 if not
+3. `nix build .#nixosConfigurations.hermes.config.system.build.toplevel` locally
+4. `nix copy --to ssh://$HERMES_HOST "$STORE_PATH"` pushes the closure
+5. `nixos-rebuild switch --store-paths "$STORE_PATH"` on hermes (no local build)
+6. Health-check — hermes-agent active + `hermes doctor` passes
+7. Starts `hermes-rollback.service` watchdog
+
+The build machine is the source of truth — no git repo on the LXC. Bypass
+with `--force-memorygate`. Default host is `root@192.168.193.158` (zerotier),
+override with `HERMES_HOST`.
+
+### From hermes (self-modify)
+
+The bot (hermes) can build, deploy, and roll back itself using the `hermes-deploy`
+systemd unit. This is the "self-managing" path.
+
+```sh
+# On the LXC:
+hermes-deploy            # triggers the hermes-deploy.service
+# or equivalent:
+nixos-rebuild switch --flake /var/lib/hermes-deploy#hermes
+```
+
+The deployScript does:
+1. `git -C /var/lib/hermes-deploy add -A && commit` (records any uncommitted edits)
+2. `git submodule update` (ensures vendor/ submodules match the ledger)
+3. `nixos-rebuild switch --max-jobs 1 --cores 2 --flake "${cfg.repoDir}#${cfg.flakeAttr}"`
+4. Health-check (`hermes-agent active` + `hermes doctor`) with ${cfg.gracePeriod}s grace
+5. If unhealthy → content-recovery (`hermes-tool revert`) → then generation rollback (one step back)
+6. `sync_repo_to_gen` — resets git + vendor/ submodules to the rolled-back generation's commit
+
+The bot is a trusted nix user (`trusted-users = [ "hermes" ]`), so it can
+run `nixos-rebuild` directly. The systemd unit (`hermes-deploy`) is the
+convenient wrapper. Every activation creates a new generation the watchdog
+can roll back.
+
+Both paths create `gen-<N>` tags in the git ledger and update
+`/var/lib/hermes-deploy/last-known-good`. The watchdog runs every 15 minutes,
+checking the agent, and only rolls back past the last-known-good generation
+(so deliberate stops never trigger auto-rollback).
 
 ## Secrets
 
