@@ -1,0 +1,1361 @@
+{
+  "views": [
+    {
+      "title": "Today",
+      "path": "today",
+      "icon": "mdi:calendar-today",
+      "type": "sections",
+      "max_columns": 3,
+      "badges": [
+        {
+          "type": "entity",
+          "entity": "sensor.pixel_8_daily_steps",
+          "show_name": true,
+          "show_state": true
+        },
+        {
+          "type": "entity",
+          "entity": "sensor.withings_weight",
+          "show_name": true,
+          "show_state": true
+        },
+        {
+          "type": "entity",
+          "entity": "sensor.pixel_8_sleep_duration",
+          "show_name": true,
+          "show_state": true
+        }
+      ],
+      "sections": [
+        {
+          "type": "grid",
+          "cards": [
+            {
+              "type": "heading",
+              "heading": "Activity",
+              "icon": "mdi:run"
+            },
+            {
+              "type": "tile",
+              "entity": "sensor.pixel_8_daily_steps",
+              "name": "Steps",
+              "features": [
+                {
+                  "type": "bar-gauge",
+                  "min": 0,
+                  "max": 10000
+                }
+              ],
+              "grid_options": {
+                "columns": "full"
+              }
+            },
+            {
+              "type": "tile",
+              "entity": "sensor.pixel_8_daily_distance",
+              "name": "Distance",
+              "grid_options": {
+                "columns": 6
+              }
+            },
+            {
+              "type": "tile",
+              "entity": "sensor.pixel_8_daily_floors",
+              "name": "Floors",
+              "grid_options": {
+                "columns": 6
+              }
+            },
+            {
+              "type": "tile",
+              "entity": "sensor.pixel_8_active_calories_burned",
+              "name": "Active kcal",
+              "grid_options": {
+                "columns": 6
+              }
+            },
+            {
+              "type": "tile",
+              "entity": "sensor.pixel_8_total_calories_burned",
+              "name": "Total kcal",
+              "grid_options": {
+                "columns": 6
+              }
+            },
+            {
+              "type": "custom:apexcharts-card",
+              "graph_span": "7d",
+              "span": {
+                "end": "day"
+              },
+              "header": {
+                "show": true,
+                "title": "Calories spent",
+                "show_states": true,
+                "colorize_states": true
+              },
+              "apex_config": {
+                "chart": {
+                  "height": 220
+                },
+                "xaxis": {
+                  "labels": {
+                    "format": "ddd"
+                  }
+                },
+                "legend": {
+                  "show": false
+                }
+              },
+              "yaxis": [
+                {
+                  "min": 1650,
+                  "decimals": 0
+                }
+              ],
+              "series": [
+                {
+                  "entity": "sensor.pixel_8_total_calories_burned",
+                  "name": "Calories spent",
+                  "type": "column",
+                  "color": "#ef5350",
+                  "group_by": {
+                    "duration": "1d",
+                    "func": "last"
+                  },
+                  "unit": " kcal",
+                  "float_precision": 0,
+                  "show": {
+                    "datalabels": true
+                  }
+                }
+              ],
+              "grid_options": {
+                "columns": "full",
+                "rows": "auto"
+              }
+            }
+          ]
+        },
+        {
+          "type": "grid",
+          "cards": [
+            {
+              "type": "heading",
+              "heading": "Sleep & vitals",
+              "icon": "mdi:heart-pulse"
+            },
+            {
+              "type": "custom:apexcharts-card",
+              "graph_span": "7d",
+              "span": {
+                "end": "day"
+              },
+              "header": {
+                "show": true,
+                "title": "Sleep",
+                "show_states": true,
+                "colorize_states": true
+              },
+              "apex_config": {
+                "chart": {
+                  "height": 220
+                },
+                "xaxis": {
+                  "labels": {
+                    "format": "ddd"
+                  }
+                },
+                "legend": {
+                  "show": false
+                }
+              },
+              "yaxis": [
+                {
+                  "min": 0,
+                  "decimals": 1
+                }
+              ],
+              "series": [
+                {
+                  "entity": "sensor.pixel_8_sleep_duration",
+                  "name": "Sleep",
+                  "type": "column",
+                  "color": "#7e57c2",
+                  "group_by": {
+                    "duration": "1d",
+                    "func": "max"
+                  },
+                  "transform": "return x / 60;",
+                  "unit": " h",
+                  "float_precision": 1,
+                  "show": {
+                    "datalabels": true
+                  }
+                }
+              ],
+              "grid_options": {
+                "columns": "full",
+                "rows": "auto"
+              }
+            },
+            {
+              "type": "tile",
+              "entity": "sensor.pixel_8_heart_rate",
+              "name": "Heart rate",
+              "grid_options": {
+                "columns": 6
+              }
+            },
+            {
+              "type": "tile",
+              "entity": "sensor.pixel_8_heart_rate_variability",
+              "name": "HRV",
+              "grid_options": {
+                "columns": 6
+              }
+            },
+            {
+              "type": "tile",
+              "entity": "sensor.pixel_8_oxygen_saturation",
+              "name": "SpO2",
+              "grid_options": {
+                "columns": 6
+              }
+            },
+            {
+              "type": "tile",
+              "entity": "sensor.pixel_8_respiratory_rate",
+              "name": "Respiration",
+              "grid_options": {
+                "columns": 6
+              }
+            }
+          ]
+        },
+        {
+          "type": "grid",
+          "cards": [
+            {
+              "type": "heading",
+              "heading": "Food log",
+              "icon": "mdi:food-apple"
+            },
+            {
+              "type": "custom:apexcharts-card",
+              "graph_span": "7d",
+              "span": {
+                "end": "day"
+              },
+              "header": {
+                "show": true,
+                "title": "Calories & macros",
+                "show_states": true,
+                "colorize_states": true
+              },
+              "apex_config": {
+                "chart": {
+                  "height": 300
+                },
+                "xaxis": {
+                  "labels": {
+                    "format": "ddd"
+                  }
+                },
+                "legend": {
+                  "show": false,
+                  "position": "top",
+                  "horizontalAlign": "center"
+                },
+                "dataLabels": {
+                  "enabled": true,
+                  "style": {
+                    "fontSize": "11px"
+                  }
+                },
+                "plotOptions": {
+                  "bar": {
+                    "borderRadius": 4,
+                    "borderRadiusApplication": "end",
+                    "columnWidth": "65%"
+                  }
+                }
+              },
+              "yaxis": [
+                {
+                  "id": "macro4",
+                  "min": 0,
+                  "max": 750,
+                  "show": false
+                },
+                {
+                  "id": "macro9",
+                  "min": 0,
+                  "max": 333,
+                  "show": false
+                },
+                {
+                  "id": "kcal",
+                  "min": 0,
+                  "max": 3000,
+                  "show": false
+                }
+              ],
+              "series": [
+                {
+                  "entity": "sensor.food_protein_today",
+                  "name": "Protein",
+                  "type": "column",
+                  "color": "#66bb6a",
+                  "group_by": {
+                    "duration": "1d",
+                    "func": "max"
+                  },
+                  "yaxis_id": "macro4",
+                  "unit": "g",
+                  "float_precision": 0,
+                  "show": {
+                    "datalabels": true
+                  },
+                  "transform": "return x > 0 && x < 200 ? x : null;"
+                },
+                {
+                  "entity": "sensor.food_carbs_today",
+                  "name": "Carbs",
+                  "type": "column",
+                  "color": "#ffa726",
+                  "group_by": {
+                    "duration": "1d",
+                    "func": "max"
+                  },
+                  "yaxis_id": "macro4",
+                  "unit": "g",
+                  "float_precision": 0,
+                  "show": {
+                    "datalabels": true
+                  },
+                  "transform": "return x > 0 && x < 400 ? x : null;"
+                },
+                {
+                  "entity": "sensor.food_fat_today",
+                  "name": "Fat",
+                  "type": "column",
+                  "color": "#42a5f5",
+                  "group_by": {
+                    "duration": "1d",
+                    "func": "max"
+                  },
+                  "yaxis_id": "macro9",
+                  "unit": "g",
+                  "float_precision": 0,
+                  "show": {
+                    "datalabels": true
+                  },
+                  "transform": "return x > 0 && x < 200 ? x : null;"
+                },
+                {
+                  "entity": "sensor.food_calories_today",
+                  "name": "Calories (logged)",
+                  "type": "line",
+                  "color": "#ef5350",
+                  "group_by": {
+                    "duration": "1d",
+                    "func": "max"
+                  },
+                  "yaxis_id": "kcal",
+                  "stroke_width": 3,
+                  "show": {
+                    "datalabels": true,
+                    "in_header": true
+                  },
+                  "float_precision": 0,
+                  "unit": "kcal",
+                  "transform": "return x > 0 && x < 3000 ? x : null;"
+                },
+                {
+                  "entity": "sensor.pixel_8_total_calories_burned",
+                  "name": "Calories burned",
+                  "type": "line",
+                  "color": "#26a69a",
+                  "group_by": {
+                    "duration": "1d",
+                    "func": "last"
+                  },
+                  "yaxis_id": "kcal",
+                  "stroke_width": 2,
+                  "unit": " kcal",
+                  "float_precision": 0,
+                  "show": {
+                    "datalabels": true
+                  }
+                },
+                {
+                  "entity": "input_number.target_protein",
+                  "name": "Target protein",
+                  "type": "line",
+                  "color": "#a5d6a7",
+                  "group_by": {
+                    "duration": "1d",
+                    "func": "last"
+                  },
+                  "yaxis_id": "macro4",
+                  "stroke_width": 1,
+                  "unit": " g",
+                  "float_precision": 0,
+                  "show": {
+                    "datalabels": false
+                  }
+                },
+                {
+                  "entity": "input_number.target_calories",
+                  "name": "Target calories",
+                  "type": "line",
+                  "color": "#ef9a9a",
+                  "group_by": {
+                    "duration": "1d",
+                    "func": "last"
+                  },
+                  "yaxis_id": "kcal",
+                  "stroke_width": 1,
+                  "unit": " kcal",
+                  "float_precision": 0,
+                  "show": {
+                    "datalabels": false
+                  }
+                }
+              ],
+              "grid_options": {
+                "columns": "full",
+                "rows": "auto"
+              }
+            },
+            {
+              "type": "entities",
+              "title": "Targets",
+              "entities": [
+                {
+                  "entity": "input_number.target_protein",
+                  "name": "Target protein"
+                },
+                {
+                  "entity": "input_number.target_calories",
+                  "name": "Target calories"
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "type": "grid",
+          "cards": [
+            {
+              "type": "heading",
+              "heading": "Body",
+              "icon": "mdi:scale-bathroom"
+            },
+            {
+              "type": "markdown",
+              "content": "{% set w = states('sensor.withings_weight') | float(0) %}### {{ w | round(1) }} kg\nBody fat **{{ states('sensor.withings_fat_ratio') | float(0) | round(1) }}%** ({{ states('sensor.withings_fat_mass') | float(0) | round(1) }} kg) \u00b7 lean **{{ states('sensor.withings_fat_free_mass') | float(0) | round(1) }} kg**\n\nLast weigh-in {{ relative_time(states.sensor.withings_weight.last_changed) }} ago"
+            },
+            {
+              "type": "custom:apexcharts-card",
+              "graph_span": "7d",
+              "span": {
+                "end": "day"
+              },
+              "header": {
+                "show": true,
+                "title": "Muscle & weight",
+                "show_states": true,
+                "colorize_states": true
+              },
+              "apex_config": {
+                "chart": {
+                  "height": 220
+                },
+                "xaxis": {
+                  "labels": {
+                    "format": "MMM d"
+                  }
+                },
+                "legend": {
+                  "show": true,
+                  "position": "top",
+                  "horizontalAlign": "center"
+                }
+              },
+              "yaxis": [
+                {
+                  "min": "|-3|",
+                  "max": "|+3|"
+                }
+              ],
+              "series": [
+                {
+                  "entity": "sensor.withings_weight",
+                  "name": "Total weight",
+                  "type": "line",
+                  "color": "#2196f3",
+                  "group_by": {
+                    "duration": "1d",
+                    "func": "last",
+                    "fill": "last"
+                  },
+                  "curve": "smooth",
+                  "stroke_width": 2,
+                  "unit": " kg",
+                  "float_precision": 1
+                },
+                {
+                  "entity": "sensor.withings_muscle_mass",
+                  "name": "Muscle",
+                  "type": "line",
+                  "color": "#4caf50",
+                  "group_by": {
+                    "duration": "1d",
+                    "func": "last",
+                    "fill": "last"
+                  },
+                  "curve": "smooth",
+                  "stroke_width": 2,
+                  "unit": " kg",
+                  "float_precision": 1
+                }
+              ],
+              "grid_options": {
+                "columns": "full",
+                "rows": "auto"
+              }
+            },
+            {
+              "type": "tile",
+              "entity": "sensor.withings_fat_ratio",
+              "name": "Body fat",
+              "features": [
+                {
+                  "type": "trend-graph",
+                  "hours_to_show": 168
+                }
+              ],
+              "grid_options": {
+                "columns": "full"
+              }
+            },
+            {
+              "type": "custom:apexcharts-card",
+              "graph_span": "7d",
+              "span": {
+                "end": "day"
+              },
+              "header": {
+                "show": true,
+                "title": "Left/right balance",
+                "show_states": true,
+                "colorize_states": true
+              },
+              "apex_config": {
+                "chart": {
+                  "height": 220
+                },
+                "xaxis": {
+                  "labels": {
+                    "format": "ddd"
+                  },
+                  "axisBorder": {
+                    "show": false
+                  },
+                  "axisTicks": {
+                    "show": false
+                  }
+                },
+                "legend": {
+                  "show": true,
+                  "position": "top",
+                  "horizontalAlign": "center"
+                },
+                "annotations": {
+                  "yaxis": [
+                    {
+                      "y": 0,
+                      "y2": 10,
+                      "fillColor": "#ef5350",
+                      "opacity": 0.09
+                    },
+                    {
+                      "y": -10,
+                      "y2": 0,
+                      "fillColor": "#4caf50",
+                      "opacity": 0.09
+                    },
+                    {
+                      "y": 0,
+                      "borderColor": "#c3c2b7",
+                      "borderWidth": 1.5,
+                      "strokeDashArray": 0
+                    }
+                  ]
+                }
+              },
+              "yaxis": [
+                {
+                  "min": -10,
+                  "max": 10
+                }
+              ],
+              "grid_options": {
+                "columns": "full",
+                "rows": "auto"
+              },
+              "series": [
+                {
+                  "entity": "sensor.arm_asymmetry",
+                  "name": "Arms",
+                  "type": "line",
+                  "color": "#e87ba4",
+                  "group_by": {
+                    "duration": "7d",
+                    "func": "last",
+                    "fill": "last"
+                  },
+                  "curve": "smooth",
+                  "stroke_width": 2,
+                  "unit": " %",
+                  "float_precision": 1
+                },
+                {
+                  "entity": "sensor.leg_asymmetry",
+                  "name": "Legs",
+                  "type": "line",
+                  "color": "#4a3aa7",
+                  "group_by": {
+                    "duration": "7d",
+                    "func": "last",
+                    "fill": "last"
+                  },
+                  "curve": "smooth",
+                  "stroke_width": 2,
+                  "unit": " %",
+                  "float_precision": 1
+                }
+              ]
+            },
+            {
+              "type": "tile",
+              "entity": "sensor.withings_fat_ratio",
+              "name": "Body fat",
+              "grid_options": {
+                "columns": 6
+              }
+            },
+            {
+              "type": "tile",
+              "entity": "sensor.withings_muscle_mass",
+              "name": "Muscle",
+              "grid_options": {
+                "columns": 6
+              }
+            },
+            {
+              "type": "tile",
+              "entity": "sensor.withings_hydration",
+              "name": "Water",
+              "grid_options": {
+                "columns": 6
+              }
+            },
+            {
+              "type": "tile",
+              "entity": "sensor.withings_bone_mass",
+              "name": "Bone",
+              "grid_options": {
+                "columns": 6
+              }
+            },
+            {
+              "type": "tile",
+              "entity": "sensor.pixel_8_basal_metabolic_rate",
+              "name": "BMR",
+              "grid_options": {
+                "columns": 6
+              }
+            },
+            {
+              "type": "tile",
+              "entity": "sensor.withings_pulse_wave_velocity",
+              "name": "Pulse wave vel.",
+              "grid_options": {
+                "columns": 6
+              }
+            }
+          ]
+        },
+        {
+          "type": "grid",
+          "cards": [
+            {
+              "type": "heading",
+              "heading": "Daily log",
+              "icon": "mdi:calendar-check"
+            },
+            {
+              "type": "calendar",
+              "entities": [
+                "calendar.sleep_log",
+                "calendar.calories_log"
+              ],
+              "initial_view": "listWeek",
+              "grid_options": {
+                "columns": "full",
+                "rows": "auto"
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "title": "Trends",
+      "path": "trends",
+      "icon": "mdi:chart-line",
+      "type": "sections",
+      "max_columns": 2,
+      "sections": [
+        {
+          "type": "grid",
+          "cards": [
+            {
+              "type": "heading",
+              "heading": "Body fat %",
+              "icon": "mdi:percent"
+            },
+            {
+              "type": "custom:apexcharts-card",
+              "graph_span": "365d",
+              "span": {
+                "end": "day"
+              },
+              "header": {
+                "show": true,
+                "show_states": true,
+                "colorize_states": true
+              },
+              "apex_config": {
+                "chart": {
+                  "height": 260
+                },
+                "legend": {
+                  "show": true
+                },
+                "grid": {
+                  "borderColor": "#333333"
+                }
+              },
+              "grid_options": {
+                "columns": "full",
+                "rows": "auto"
+              },
+              "series": [
+                {
+                  "statistics": {
+                    "type": "mean",
+                    "period": "day"
+                  },
+                  "group_by": {
+                    "duration": "7d",
+                    "func": "avg",
+                    "fill": "last"
+                  },
+                  "curve": "smooth",
+                  "stroke_width": 2,
+                  "extend_to": "now",
+                  "float_precision": 1,
+                  "entity": "sensor.withings_fat_ratio",
+                  "name": "Body fat",
+                  "color": "#ff9800"
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "type": "grid",
+          "cards": [
+            {
+              "type": "custom:apexcharts-card",
+              "graph_span": "365d",
+              "span": {
+                "end": "day"
+              },
+              "header": {
+                "show": true,
+                "title": "Body composition",
+                "show_states": true,
+                "colorize_states": true
+              },
+              "apex_config": {
+                "chart": {
+                  "height": 260
+                },
+                "legend": {
+                  "show": true
+                },
+                "grid": {
+                  "borderColor": "#333333"
+                }
+              },
+              "yaxis": [
+                {}
+              ],
+              "grid_options": {
+                "columns": "full",
+                "rows": "auto"
+              },
+              "series": [
+                {
+                  "statistics": {
+                    "type": "mean",
+                    "period": "day"
+                  },
+                  "group_by": {
+                    "duration": "7d",
+                    "func": "avg",
+                    "fill": "last"
+                  },
+                  "curve": "smooth",
+                  "stroke_width": 2,
+                  "extend_to": "now",
+                  "float_precision": 1,
+                  "entity": "sensor.withings_muscle_mass",
+                  "name": "Muscle",
+                  "color": "#4caf50",
+                  "unit": " kg"
+                },
+                {
+                  "statistics": {
+                    "type": "mean",
+                    "period": "day"
+                  },
+                  "group_by": {
+                    "duration": "7d",
+                    "func": "avg",
+                    "fill": "last"
+                  },
+                  "curve": "smooth",
+                  "stroke_width": 2,
+                  "extend_to": "now",
+                  "float_precision": 1,
+                  "entity": "sensor.withings_hydration",
+                  "name": "Water",
+                  "color": "#29b6f6",
+                  "unit": " kg"
+                },
+                {
+                  "statistics": {
+                    "type": "mean",
+                    "period": "day"
+                  },
+                  "group_by": {
+                    "duration": "7d",
+                    "func": "avg",
+                    "fill": "last"
+                  },
+                  "curve": "smooth",
+                  "stroke_width": 2,
+                  "extend_to": "now",
+                  "float_precision": 1,
+                  "entity": "sensor.withings_fat_mass",
+                  "name": "Fat",
+                  "color": "#ff9800",
+                  "unit": " kg"
+                },
+                {
+                  "statistics": {
+                    "type": "mean",
+                    "period": "day"
+                  },
+                  "group_by": {
+                    "duration": "7d",
+                    "func": "avg",
+                    "fill": "last"
+                  },
+                  "curve": "smooth",
+                  "stroke_width": 2,
+                  "extend_to": "now",
+                  "float_precision": 1,
+                  "entity": "sensor.withings_bone_mass",
+                  "name": "Bone",
+                  "color": "#9e9e9e",
+                  "unit": " kg"
+                },
+                {
+                  "statistics": {
+                    "type": "mean",
+                    "period": "day"
+                  },
+                  "group_by": {
+                    "duration": "7d",
+                    "func": "avg",
+                    "fill": "last"
+                  },
+                  "curve": "smooth",
+                  "stroke_width": 2,
+                  "extend_to": "now",
+                  "float_precision": 1,
+                  "entity": "sensor.withings_weight",
+                  "name": "Total weight",
+                  "color": "#212121",
+                  "unit": " kg"
+                }
+              ]
+            }
+          ],
+          "column_span": 2
+        },
+        {
+          "type": "grid",
+          "cards": [
+            {
+              "type": "heading",
+              "heading": "Arterial stiffness",
+              "icon": "mdi:heart-pulse"
+            },
+            {
+              "type": "custom:apexcharts-card",
+              "graph_span": "365d",
+              "span": {
+                "end": "day"
+              },
+              "header": {
+                "show": true,
+                "show_states": true,
+                "colorize_states": true
+              },
+              "apex_config": {
+                "chart": {
+                  "height": 260
+                },
+                "legend": {
+                  "show": true
+                },
+                "grid": {
+                  "borderColor": "#333333"
+                }
+              },
+              "grid_options": {
+                "columns": "full",
+                "rows": "auto"
+              },
+              "series": [
+                {
+                  "statistics": {
+                    "type": "mean",
+                    "period": "day"
+                  },
+                  "group_by": {
+                    "duration": "7d",
+                    "func": "avg",
+                    "fill": "last"
+                  },
+                  "curve": "smooth",
+                  "stroke_width": 2,
+                  "extend_to": "now",
+                  "float_precision": 1,
+                  "entity": "sensor.withings_pulse_wave_velocity",
+                  "name": "Pulse wave velocity",
+                  "color": "#f44336"
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "type": "grid",
+          "column_span": 2,
+          "cards": [
+            {
+              "type": "heading",
+              "heading": "Daily steps",
+              "icon": "mdi:walk"
+            },
+            {
+              "type": "heading",
+              "heading": "Per-day totals from Health Connect \u2014 history starts when phone sync began.",
+              "heading_style": "subtitle"
+            },
+            {
+              "type": "statistics-graph",
+              "entities": [
+                {
+                  "entity": "sensor.pixel_8_daily_steps",
+                  "name": "Steps",
+                  "color": "purple"
+                }
+              ],
+              "days_to_show": 30,
+              "period": "day",
+              "chart_type": "bar",
+              "stat_types": [
+                "change"
+              ],
+              "grid_options": {
+                "columns": "full",
+                "rows": 5
+              }
+            }
+          ]
+        },
+        {
+          "type": "grid",
+          "cards": [
+            {
+              "type": "heading",
+              "heading": "Food intake trends",
+              "icon": "mdi:chart-timeline-variant"
+            },
+            {
+              "type": "custom:apexcharts-card",
+              "graph_span": "365d",
+              "span": {
+                "end": "day"
+              },
+              "header": {
+                "show": true,
+                "title": "Macronutrients",
+                "show_states": true,
+                "colorize_states": true
+              },
+              "apex_config": {
+                "chart": {
+                  "height": 260
+                },
+                "legend": {
+                  "show": true
+                },
+                "grid": {
+                  "borderColor": "#333333"
+                },
+                "stroke": {
+                  "dashArray": [
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    5,
+                    5
+                  ]
+                }
+              },
+              "yaxis": [
+                {
+                  "id": "g",
+                  "min": 0
+                },
+                {
+                  "id": "kcal",
+                  "min": 0,
+                  "opposite": true
+                }
+              ],
+              "grid_options": {
+                "columns": "full",
+                "rows": "auto"
+              },
+              "series": [
+                {
+                  "statistics": {
+                    "type": "mean",
+                    "period": "day"
+                  },
+                  "group_by": {
+                    "duration": "7d",
+                    "func": "max",
+                    "fill": "last"
+                  },
+                  "curve": "smooth",
+                  "stroke_width": 2,
+                  "extend_to": "now",
+                  "float_precision": 1,
+                  "entity": "sensor.food_protein_today",
+                  "name": "Protein",
+                  "color": "#66bb6a",
+                  "yaxis_id": "g",
+                  "transform": "return x > 0 && x < 200 ? x : null;",
+                  "offset": "+3h"
+                },
+                {
+                  "statistics": {
+                    "type": "mean",
+                    "period": "day"
+                  },
+                  "group_by": {
+                    "duration": "7d",
+                    "func": "max",
+                    "fill": "last"
+                  },
+                  "curve": "smooth",
+                  "stroke_width": 2,
+                  "extend_to": "now",
+                  "float_precision": 1,
+                  "entity": "sensor.food_carbs_today",
+                  "name": "Carbs",
+                  "color": "#ffa726",
+                  "yaxis_id": "g",
+                  "transform": "return x > 0 && x < 400 ? x : null;",
+                  "offset": "+3h"
+                },
+                {
+                  "statistics": {
+                    "type": "mean",
+                    "period": "day"
+                  },
+                  "group_by": {
+                    "duration": "7d",
+                    "func": "max",
+                    "fill": "last"
+                  },
+                  "curve": "smooth",
+                  "stroke_width": 2,
+                  "extend_to": "now",
+                  "float_precision": 1,
+                  "entity": "sensor.food_fat_today",
+                  "name": "Fat",
+                  "color": "#42a5f5",
+                  "yaxis_id": "g",
+                  "transform": "return x > 0 && x < 200 ? x : null;",
+                  "offset": "+3h"
+                },
+                {
+                  "statistics": {
+                    "type": "mean",
+                    "period": "day"
+                  },
+                  "group_by": {
+                    "duration": "7d",
+                    "func": "max",
+                    "fill": "last"
+                  },
+                  "curve": "smooth",
+                  "stroke_width": 2,
+                  "extend_to": "now",
+                  "float_precision": 1,
+                  "entity": "sensor.food_calories_today",
+                  "name": "Calories",
+                  "color": "#ef5350",
+                  "yaxis_id": "kcal",
+                  "transform": "return x > 0 && x < 3000 ? x : null;",
+                  "offset": "+3h"
+                },
+                {
+                  "statistics": {
+                    "type": "mean",
+                    "period": "day"
+                  },
+                  "group_by": {
+                    "duration": "7d",
+                    "func": "avg",
+                    "fill": "last"
+                  },
+                  "curve": "smooth",
+                  "stroke_width": 2,
+                  "extend_to": "now",
+                  "float_precision": 1,
+                  "entity": "sensor.pixel_8_total_calories_burned",
+                  "name": "Calories burned",
+                  "color": "#26a69a",
+                  "yaxis_id": "kcal"
+                },
+                {
+                  "group_by": {
+                    "duration": "7d",
+                    "func": "last",
+                    "fill": "last"
+                  },
+                  "curve": "smooth",
+                  "stroke_width": 1,
+                  "extend_to": "now",
+                  "float_precision": 0,
+                  "entity": "input_number.target_protein",
+                  "name": "Target protein",
+                  "color": "#a5d6a7",
+                  "yaxis_id": "g"
+                },
+                {
+                  "group_by": {
+                    "duration": "7d",
+                    "func": "last",
+                    "fill": "last"
+                  },
+                  "curve": "smooth",
+                  "stroke_width": 1,
+                  "extend_to": "now",
+                  "float_precision": 0,
+                  "entity": "input_number.target_calories",
+                  "name": "Target calories",
+                  "color": "#ef9a9a",
+                  "yaxis_id": "kcal"
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "type": "grid",
+          "column_span": 2,
+          "cards": [
+            {
+              "type": "custom:apexcharts-card",
+              "graph_span": "365d",
+              "span": {
+                "end": "day"
+              },
+              "header": {
+                "show": true,
+                "title": "Left/right balance",
+                "show_states": true,
+                "colorize_states": true
+              },
+              "apex_config": {
+                "chart": {
+                  "height": 260
+                },
+                "legend": {
+                  "show": true
+                },
+                "grid": {
+                  "borderColor": "#333333"
+                },
+                "annotations": {
+                  "yaxis": [
+                    {
+                      "y": 0,
+                      "y2": 10,
+                      "fillColor": "#ef5350",
+                      "opacity": 0.09
+                    },
+                    {
+                      "y": -10,
+                      "y2": 0,
+                      "fillColor": "#4caf50",
+                      "opacity": 0.09
+                    },
+                    {
+                      "y": 0,
+                      "borderColor": "#c3c2b7",
+                      "borderWidth": 1.5,
+                      "strokeDashArray": 0
+                    }
+                  ]
+                },
+                "xaxis": {
+                  "axisBorder": {
+                    "show": false
+                  },
+                  "axisTicks": {
+                    "show": false
+                  }
+                }
+              },
+              "yaxis": [
+                {
+                  "min": -10,
+                  "max": 10
+                }
+              ],
+              "grid_options": {
+                "columns": "full",
+                "rows": "auto"
+              },
+              "series": [
+                {
+                  "group_by": {
+                    "duration": "7d",
+                    "func": "last",
+                    "fill": "last"
+                  },
+                  "curve": "smooth",
+                  "stroke_width": 2,
+                  "extend_to": "now",
+                  "float_precision": 1,
+                  "entity": "sensor.arm_asymmetry",
+                  "name": "Arms",
+                  "color": "#e87ba4",
+                  "unit": " %"
+                },
+                {
+                  "group_by": {
+                    "duration": "7d",
+                    "func": "last",
+                    "fill": "last"
+                  },
+                  "curve": "smooth",
+                  "stroke_width": 2,
+                  "extend_to": "now",
+                  "float_precision": 1,
+                  "entity": "sensor.leg_asymmetry",
+                  "name": "Legs",
+                  "color": "#4a3aa7",
+                  "unit": " %"
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "title": "Gym session",
+      "path": "feedback",
+      "icon": "mdi:dumbbell",
+      "type": "sections",
+      "max_columns": 1,
+      "sections": [
+        {
+          "type": "grid",
+          "cards": [
+            {
+              "type": "heading",
+              "heading_style": "title",
+              "heading": "Next workout"
+            },
+            {
+              "type": "todo-list",
+              "entity": "todo.fitness"
+            }
+          ]
+        },
+        {
+          "type": "grid",
+          "cards": [
+            {
+              "type": "heading",
+              "heading_style": "title",
+              "heading": "Session feedback"
+            },
+            {
+              "type": "tile",
+              "entity": "input_number.workout_effort_rpe",
+              "name": "Effort rating (RPE)",
+              "features": [
+                {
+                  "type": "numeric-input",
+                  "style": "slider"
+                }
+              ]
+            },
+            {
+              "type": "entities",
+              "title": "Notes",
+              "entities": [
+                {
+                  "entity": "input_text.workout_feedback",
+                  "name": "Feedback for next session"
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

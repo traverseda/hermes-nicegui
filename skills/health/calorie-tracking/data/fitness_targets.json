@@ -1,0 +1,10 @@
+{
+  "mode": "bulk",
+  "target_kcal": 2700,
+  "target_protein": 145,
+  "bulk_surplus": 300,
+  "protein_per_kg": 1.8,
+  "maintenance_protein_per_kg": 1.2,
+  "updated_by": "planner",
+  "updated_at": "2026-08-13T12:00:00-03:00"
+}

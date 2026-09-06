@@ -1,0 +1,285 @@
+{
+  "updated_at": "2026-08-15T04:19:51.966698+00:00",
+  "source": "hermesagent.lan ~/.hermes/cron/jobs.json (2026-08-15 pull, redacted)",
+  "jobs": [
+    {
+      "id": "ee2bbc93c7b2",
+      "name": "arr-queue-nightly-check",
+      "prompt": "## Nightly arr Maintenance — Mission\n\nYou manage traverseda's media stack. Your mission: keep the library **complete** (grab what's missing), **compact** (prefer HEVC/AV1, small encodes), and **healthy** (no stuck queue items, no systemic blocks).\n\n### Standard Workflow (4 Phases)\n\n1. **SAB Health** — check SABnzbd is alive and has no critical issues\n2. **Queue Cleanup** — inspect the Sonarr+Radarr queue, read each stuck item's error, and make a judgement call (see the skill's Queue Management section). Use `arr-queue-inspect`, `arr-queue-lookup`, `arr-queue-fix-import`, `arr-queue-remove`, `arr-queue-manual-import`, and `arr-queue-season-pack-import` as appropriate.\n3. **Incomplete Investigation** — pick 1-2 shows with the most missing episodes, investigate why they're stuck, and fix: search for releases, push grabs, exempt from CF 6 if non-English. Use `arr-einfo`, `arr-search`, `arr-incomplete`, `arr-foreign-show-exempt`, and `arr-queue-trigger-search`.\n4. **Season Pack Hunting** — run `arr-hunter` on 3 candidates with the most missing episodes to find season packs.\n\n### Never Grab Unreleased Episodes (HARD RULE)\n\n**Do NOT search for, grab, or push releases for any episode whose `airDateUtc` is in the future — the episode has not aired yet.** Any release found for an unreleased episode is a fake/leak (e.g. Futurama S11E04-E10 had fake HDTV-1080p releases weeks before airing). Grabbing them wastes bandwidth and fills the library with wrong content.\n\n- Before searching or grabbing any episode, check its `airDateUtc` (via `GET /api/v3/episode?seriesId=<id>` or `arr-einfo`).\n- Episodes with future `airDateUtc`: **skip entirely** — leave monitored, do not search, do not grab, do not push. A real release will appear only after it airs; the next nightly run will catch it.\n- This applies to every phase: Phase 3 incomplete investigation, Phase 4 season pack hunting, and any manual search triggered from the queue.\n- If an unreleased episode somehow has a file already (pre-air leak import), do NOT re-grab or delete — leave it; it may be the only copy until the real release.\n\n### Season-Numbering Mismatch Resolution\n\nWhen a season pack fails with \"Invalid season or episode\" (e.g. Pawn Stars scene S08 vs year-based seasons), do NOT delete the queue and walk away, and do NOT guess the mapping. Use the primitive tools to make an informed judgement call:\n\n1. **`arr-series-show sonarr <series_id>`** — see the season structure and scene-marker ranges (e.g. S2014 = scene S8E23–S11E34). This tells you which year-season a scene-numbered pack belongs to.\n2. **`arr-import-scan sonarr <queue_id>`** — list every file in the download folder with its full path, size, quality, and languages. Read the file names to get scene S##E##.\n3. **`arr-list-episodes sonarr <series_id> <season> --missing-only`** — list episode IDs with scene markers (e.g. `S2014E25 [id=22615] scene=8/47`).\n4. **Cross-reference and import** — a file named `Pawn.Stars.S08E47` maps to the episode whose scene marker is 8/47. Import it with `arr-import-now sonarr --path <file_path> --download-id <dl_id> --series-id <series_id> --episode-ids <id>`. Add `--remove-queue <queue_id>` to clean up after import.\n5. **Don't assume sequential offset** — scene markers are the ground truth. Scene S08E01 may not map to Sonarr episode 1 (scene markers can start mid-season).\n\n**There is no automated renumbering flow.** The scene markers are the source of truth; read them, match files to episodes, and import.\n\n**Fallback (mapping can't be determined):** batch delete queue items (cascade, keep files in /library/new/), do NOT re-search the same scene-numbered pack.\n\n### Rules\n\n- Never unmonitor for \"not available.\" If the episode has no releases, leave it monitored — it'll catch re-posts.\n- Never combine [SILENT] with content — either report findings normally, or say [SILENT] and nothing more.\n- Always prefer HEVC/AV1 releases over H264. Compact-archive bias.\n- Verify every grab actually reached SABnzbd — \"grabbed\" is not proof of submission.\n- After any CF 6 exemption, use SeasonSearch (not release/push) to pick up the now-approved releases.\n- Batch parallel operations when possible — each grab is independent.\n- Report what was decided and why for every action taken.\n\n### Token Budget & Efficiency Guardrails (HARD)\n\nThis job runs daily and must stay lean. The 2026-08-11 run burned ~13.6M tokens (~13× normal) by rabbit-holing: repeated browser/API retries, deep investigations of one failing release, and redundant re-reads. Do NOT repeat that.\n\n- **One shot per action, no retry loops.** If a command fails, read the error once, decide, and move on. Do not retry the same failing call more than twice total — after that, note it as a known failure and continue with other work.\n- **No browser automation unless the API + CLI are both proven dead.** The arr CLI covers queue ops, imports, searches, and pushes. If you think you need a browser, you are probably missing an existing command — check the skill first.\n- **No source-code spelunking.** Do NOT clone repos or read Sonarr/Radarr source to figure out API behavior. Use the skill, the CLI help, or the API docs — then stop.\n- **Cap Phase 3 to 2 shows and Phase 4 to 3 candidates** — never expand mid-run.\n- **Keep reports compact.** Summarize decisions per item; do not dump full JSON/queue output into the report.\n- **Time-box the whole run.** If you are not done after ~30 tool calls, wrap up: report what you fixed, what's still stuck, and stop.",
+      "skills": [
+        "arr-stack"
+      ],
+      "skill": "arr-stack",
+      "model": null,
+      "provider": null,
+      "base_url": null,
+      "script": null,
+      "no_agent": false,
+      "context_from": null,
+      "schedule": {
+        "kind": "cron",
+        "expr": "0 2 * * *",
+        "display": "0 2 * * *"
+      },
+      "schedule_display": "0 2 * * *",
+      "repeat": {
+        "times": null,
+        "completed": 25
+      },
+      "enabled": false,
+      "state": "paused",
+      "paused_at": "2026-08-15T04:19:51.966698+00:00",
+      "paused_reason": "arr-stack skill + Sonarr/Radarr/Prowlarr credentials not provisioned on this box (ported as paused; see scripts/cron-port/README.md)",
+      "created_at": "2026-07-23T13:42:09.498952-03:00",
+      "next_run_at": "2026-08-15T02:00:00-03:00",
+      "last_run_at": "2026-08-14T02:14:21.650390-03:00",
+      "last_status": "ok",
+      "last_error": null,
+      "last_delivery_error": null,
+      "deliver": "discord:1530660171720953977",
+      "origin": {
+        "platform": "discord",
+        "chat_id": "1503191648962871437",
+        "chat_name": "traverseda",
+        "thread_id": null
+      },
+      "enabled_toolsets": null,
+      "workdir": null,
+      "fire_claim": null
+    },
+    {
+      "id": "beca0bd83532",
+      "name": "Tunarr Monthly Library Sync",
+      "prompt": "## Monthly Tunarr Curation — Channel Mission Review\n\nThis is a creative curation task. Your tools: `tunarr` CLI, file tools, and the arr-stack. No curl, no browser.\n\n### Steps\n\n1. Run `tunarr-monthly-diff` and read `last-diff.json` for context\n2. List all current Tunarr channels and their programs (`tunarr channels list`, `tunarr channels shows`, `tunarr schedule list`)\n3. Read the charters at `~/.hermes/data/tunarr/charters.md`\n4. Browse the full library (`tunarr library browse shows --limit 1000`, `tunarr library browse movies --limit 1000`, `tunarr library genres --list`)\n5. Re-evaluate each channel against its charter\n6. Re-evaluate the library against those missions\n7. Create, merge, or retire channels as needed (new channels get logos + charters.md entry)\n8. Add/remove programming per channel via `tunarr programs add/remove`\n9. **Write schedule configs with a `reasoning` field** on each slot explaining why the show fits the charter — this is documentation for future curation passes\n10. **Run `tunarr schedule batch`** to regenerate the monthly schedule (maxDays=31 — covers one month until next regen)\n11. Trigger Jellyfin guide refresh if needed\n\n### Charter rules\n\nA charter is a mission, not a manifest. It says what a channel IS and its curatorial goal. Do NOT turn charters into shopping lists. A couple of example shows can help illustrate the vibe, but the full show list lives in schedule configs.\n\n### Config format\n\nSchedule configs at `~/.hermes/data/tunarr/schedules/<Channel>.json`. Each slot can have a `reasoning` field — it's stripped before API calls, stored for documentation. Example:\n\n```json\n{\"type\":\"show\",\"show\":\"Band of Brothers\",\"order\":\"next\",\"weight\":1,\"cooldownMs\":0,\"reasoning\":\"WWII docudrama — the definitive 'wars' pillar show\"}\n```\n\n### Known pitfalls\n\n- `contains` search doesn't always match full names with parenthetical years\n- ~5% of shows aren't in Tunarr's index yet\n- Scan doesn't guarantee immediate indexing\n- Semicolons AND commas in show names break comma-separated CLI args. Write schedule configs as JSON files directly\n- Channel numbers don't need to be sequential\n- Shows can exist on multiple channels",
+      "skills": [
+        "tunarr",
+        "arr-stack"
+      ],
+      "skill": "tunarr",
+      "model": null,
+      "provider": null,
+      "base_url": null,
+      "script": null,
+      "no_agent": false,
+      "context_from": null,
+      "schedule": {
+        "kind": "cron",
+        "expr": "0 4 1 * *",
+        "display": "0 4 1 * *"
+      },
+      "schedule_display": "0 4 1 * *",
+      "repeat": {
+        "times": null,
+        "completed": 3
+      },
+      "enabled": false,
+      "state": "paused",
+      "paused_at": "2026-08-15T04:19:51.966698+00:00",
+      "paused_reason": "tunarr CLI + arr credentials not provisioned on this box (ported as paused; see scripts/cron-port/README.md)",
+      "created_at": "2026-07-25T10:46:55.322560-03:00",
+      "next_run_at": "2026-09-01T04:00:00-03:00",
+      "last_run_at": "2026-08-01T04:07:36.628542-03:00",
+      "last_status": "ok",
+      "last_error": null,
+      "last_delivery_error": null,
+      "deliver": "discord:1530660171720953977",
+      "origin": {
+        "platform": "discord",
+        "chat_id": "1503191648962871437",
+        "chat_name": "traverseda",
+        "thread_id": null
+      },
+      "enabled_toolsets": null,
+      "workdir": null,
+      "fire_claim": null
+    },
+    {
+      "id": "8e4e00013457",
+      "name": "Monthly Show Triage",
+      "prompt": "## Monthly Show Triage — Research & Recommendations\n\nThis is a research task with teeth. If you find genuinely great content people would enjoy, add it. Most months the answer is \"nothing needs adding\" — stay silent then.\n\n### Step 1 — Check what people are watching\n\nQuery the Jellyfin activity log for the last month to see what's getting play time:\n\n```\ncurl -s -H 'X-Emby-Token: <JELLYFIN_API_KEY>' \"https://jelly.0u0.ca/System/ActivityLog/Entries?Limit=100&StartIndex=0\" | python3 -c \"\nimport json,sys\nd=json.load(sys.stdin)\nfor e in d.get('Items',[]):\n    t=e.get('Type','')\n    if t in ('VideoPlayback','VideoPlaybackStopped'):\n        name = e.get('Name','').replace(e.get('UserName','') + ' is playing ','').replace(e.get('UserName','') + ' has finished playing ','')\n        print(f'{e[\\\"Date\\\"][:10]} | {name}')\n\"\n```\n\nThis tells you what people are actually watching, without naming specific users. If something's getting heavy play, consider similar content. If the most-watched shows are already all in the library, there's nothing to add.\n\n### Step 2 — Research what's new and good\n\nUse web search to find new shows and movies that launched recently with strong reviews. Focus on:\n- Content similar to what people are actually watching (from Step 1)\n- Shows/movies getting real buzz, not just marketing\n- New seasons of content already in the library\n\nCheck sources like \"best new TV shows [month] [year]\" or \"most anticipated new series [month] [year].\"\n\n### Step 3 — Check if it's already in the library\n\nUse the arr-stack skill credentials to check Sonarr and Radarr:\n```\ncurl -s -u 'hermes:<LDAP_PASSWORD>' -H 'X-Api-Key: <SONARR_API_KEY>' 'https://sonarr.0u0.ca/api/v3/series'\ncurl -s -u 'hermes:<LDAP_PASSWORD>' -H 'X-Api-Key: <RADARR_API_KEY>' 'https://radarr.0u0.ca/api/v3/movie'\n```\n\nIf it's already there, skip it. Only recommend things that are genuinely missing.\n\n### Step 4 — If it's a strong fit, add it\n\nOnly add if you're confident people will actually watch it — don't add things just because they're critically acclaimed if they don't match the household's viewing patterns. To add to Sonarr:\n```\ncurl -s -u 'hermes:<LDAP_PASSWORD>' -H 'X-Api-Key: <SONARR_API_KEY>' -H 'Content-Type: application/json' -X POST -d '{\n  \"title\": \"Show Name\",\n  \"tvdbId\": <id>,\n  \"qualityProfileId\": 8,\n  \"languageProfileId\": 1,\n  \"rootFolderPath\": \"/library/shows\",\n  \"monitored\": true,\n  \"addOptions\": {\"searchForMissingEpisodes\": true}\n}' 'https://sonarr.0u0.ca/api/v3/series'\n```\n\nFor movies to Radarr, use the Radarr API key and `/api/v3/movie` with `rootFolderPath: \"/library/movies\"` and qualityProfileId 9.\n\n### Step 5 — Stay silent or report\n\n- If nothing was added: respond with exactly `[SILENT]` — no output.\n- If you added something: report what, why it's a good fit for what the household actually watches. Don't mention specific users by name.",
+      "skills": [
+        "arr-stack"
+      ],
+      "skill": "arr-stack",
+      "model": null,
+      "provider": null,
+      "base_url": null,
+      "script": null,
+      "no_agent": false,
+      "context_from": null,
+      "schedule": {
+        "kind": "cron",
+        "expr": "0 2 25 * *",
+        "display": "0 2 25 * *"
+      },
+      "schedule_display": "0 2 25 * *",
+      "repeat": {
+        "times": null,
+        "completed": 2
+      },
+      "enabled": false,
+      "state": "paused",
+      "paused_at": "2026-08-15T04:19:51.966698+00:00",
+      "paused_reason": "arr-stack skill + credentials not provisioned on this box (ported as paused; see scripts/cron-port/README.md)",
+      "created_at": "2026-07-25T16:32:23.204368-03:00",
+      "next_run_at": "2026-08-25T02:00:00-03:00",
+      "last_run_at": "2026-07-25T16:45:01.760365-03:00",
+      "last_status": "ok",
+      "last_error": null,
+      "last_delivery_error": null,
+      "deliver": "discord:1530660171720953977",
+      "origin": {
+        "platform": "discord",
+        "chat_id": "1503191648962871437",
+        "chat_name": "traverseda",
+        "thread_id": null
+      },
+      "enabled_toolsets": null,
+      "workdir": null,
+      "fire_claim": null
+    },
+    {
+      "id": "38475d6b630e",
+      "name": "cronjob-self-review",
+      "prompt": "Weekly self-improvement audit of the cronjob portfolio — and the tools/scripts behind it — INCLUDING this job itself.\n\nSTART HERE: a pre-run script (cron-usage-summary.py) injects a per-job token-usage table (last 14 days) into your context — job_id, name, runs, silent count, errors, prompt/comp/total tokens, per-run cost, last run, models. Use it as the baseline for efficiency judgments; dig deeper only where the table flags something anomalous (spikes, silent runs that should speak, heavy per-run spend).\n\nLook at the scheduled jobs (`hermes cron list --all`). Don't run a fixed procedure — actually look at each one and judge it on its own merits: is it doing its job? Is it efficient, or wasting tokens/runs/schedule? Does it need a different cadence or delivery target, or to be removed? Is something plainly missing that the existing jobs point to?\n\nASSESS YOURSELF TOO. This audit job is itself a cronjob in the list and must be held to the same standard. Ask: is this audit actually producing value, or is it just another recurring token sink? Look back at what THIS job changed in prior runs and honestly judge whether those changes helped — did the jobs you tuned/created/paused get better or worse since? Did anything you did have to be undone? If the audit isn't earning its runtime, recommend or make changes to it too — including pausing or tuning itself.\n\nCRITICAL: better tools/scripts are usually the biggest win for a cronjob — more so than tweaking schedules. Most jobs are only as good as the script or skill they run. So actively look for ways to improve the underlying tooling: a job that runs a shell/python script or relies on an ad-hoc inline command should have that logic promoted into a proper, reusable script or skill. Improve, write, or rewrite scripts/tools as you see fit. Follow the established workflow: use opencode (not hand-written code) for writing and updating scripts/tools — delegate the actual coding to it, batch parallel tasks, and verify the result actually runs before you trust it.\n\nHOWEVER — DO NOT resurrect jobs for tooling that is not currently scheduled. Presence of a script, skill, or tool on disk is NOT evidence that a job for it is \"missing\" or \"dead.\" It is often intentionally decommissioned, paused, or work-in-progress (WIP) that the human left unwired on purpose. Absence of a job is not a defect. Do not create or restore jobs just because infrastructure exists to drive them. Only create a job for a genuine *recurring need* the human actually wants scheduled — when in doubt, surface it as a suggestion rather than acting on it.\n\nYou are authorized to actually act — on other jobs AND on yourself. Update, pause, resume, create, or remove jobs, and write/update the scripts and skills behind scheduled jobs — including this audit's own prompt or schedule if that's the honest call. The human keeps backups and has accepted the risk, so err on the side of decisive action — but ONLY for things that are actually scheduled and doing real work. Do not invent busywork or add filler jobs/scripts to justify your existence; additions come only from a real, uncovered recurring need.\n\nUse whatever tools you have (skills, file/state inspection, terminal) to get real context before you change something — don't act on name alone. Explain your reasoning: the job's goal, its state, and why the change is the right call.\n\nDeliver a short, skimmable bulletin to the human (discord): what you found, what you changed (job name + job_id, script/tool name, before/after), and what you deliberately left alone and why — including your self-assessment. No pleasantries, no sign-off.",
+      "skills": [],
+      "skill": null,
+      "model": null,
+      "provider": null,
+      "provider_snapshot": "opencode-go",
+      "model_snapshot": "deepseek-v4-flash",
+      "base_url": null,
+      "script": "cron-usage-summary.py",
+      "no_agent": false,
+      "monitor_script": null,
+      "monitor_url": null,
+      "monitor_state": null,
+      "context_from": null,
+      "schedule": {
+        "kind": "cron",
+        "expr": "0 6 * * 1",
+        "display": "0 6 * * 1"
+      },
+      "schedule_display": "0 6 * * 1",
+      "repeat": {
+        "times": null,
+        "completed": 2
+      },
+      "enabled": true,
+      "state": "scheduled",
+      "paused_at": null,
+      "paused_reason": null,
+      "created_at": "2026-08-10T07:38:58.445983-03:00",
+      "next_run_at": "2026-08-17T06:00:00-03:00",
+      "last_run_at": "2026-08-11T20:13:28.749692-03:00",
+      "last_status": "ok",
+      "last_error": null,
+      "last_delivery_error": null,
+      "deliver": "discord:1530660171720953977",
+      "origin": {
+        "platform": "discord",
+        "chat_id": "1503191648962871437",
+        "chat_name": "traverseda",
+        "thread_id": null,
+        "user_id": "241923975775518720"
+      },
+      "enabled_toolsets": null,
+      "workdir": null,
+      "fire_claim": null
+    },
+    {
+      "id": "9e8fe0d6a12e",
+      "name": "Note organization",
+      "prompt": "Fetch the prompt named \"organize\" from the notes MCP (mcp__xaelwiki__get_prompt, name: \"organize\"). It is your full operating instructions — follow it.",
+      "skills": [],
+      "skill": null,
+      "model": null,
+      "provider": null,
+      "provider_snapshot": "opencode-go",
+      "model_snapshot": "deepseek-v4-flash",
+      "base_url": null,
+      "script": null,
+      "no_agent": false,
+      "monitor_script": null,
+      "monitor_url": null,
+      "monitor_state": null,
+      "context_from": null,
+      "schedule": {
+        "kind": "cron",
+        "expr": "0 4 * * *",
+        "display": "0 4 * * *"
+      },
+      "schedule_display": "0 4 * * *",
+      "repeat": {
+        "times": null,
+        "completed": 7
+      },
+      "enabled": true,
+      "state": "scheduled",
+      "paused_at": null,
+      "paused_reason": null,
+      "created_at": "2026-08-10T14:10:29.069243-03:00",
+      "next_run_at": "2026-08-15T04:00:00-03:00",
+      "last_run_at": "2026-08-14T04:18:33.697793-03:00",
+      "last_status": "ok",
+      "last_error": null,
+      "last_delivery_error": null,
+      "deliver": "discord",
+      "origin": null,
+      "enabled_toolsets": null,
+      "workdir": null,
+      "toast_notifications": false,
+      "fire_claim": null,
+      "profile": null
+    },
+    {
+      "id": "94165a4948c7",
+      "name": "Sailboat Scan Nightly",
+      "prompt": "Script-only job: runs nightly-sailboat-scan.sh, which fetches new boats and fires one gateway sub-agent per boat (serial). Stdout summary is the delivery; empty stdout (zero new boats) stays silent.",
+      "skills": [],
+      "skill": null,
+      "model": null,
+      "provider": null,
+      "provider_snapshot": null,
+      "model_snapshot": null,
+      "base_url": null,
+      "script": "nightly-sailboat-scan.sh",
+      "no_agent": true,
+      "monitor_script": null,
+      "monitor_url": null,
+      "monitor_state": null,
+      "context_from": null,
+      "schedule": {
+        "kind": "cron",
+        "expr": "0 2 * * *",
+        "display": "0 2 * * *"
+      },
+      "schedule_display": "0 2 * * *",
+      "repeat": {
+        "times": null,
+        "completed": 6
+      },
+      "enabled": false,
+      "state": "paused",
+      "paused_at": "2026-08-15T04:19:51.966698+00:00",
+      "paused_reason": "sailboatpurchase service (workspace + venv + gateway API) not ported — out of scope (ported as paused; see scripts/cron-port/README.md)",
+      "created_at": "2026-08-11T08:33:31.723687-03:00",
+      "next_run_at": "2026-08-15T02:00:00-03:00",
+      "last_run_at": "2026-08-14T14:57:43.672640-03:00",
+      "last_status": "ok",
+      "last_error": null,
+      "last_delivery_error": null,
+      "deliver": "local",
+      "origin": {
+        "platform": "webui",
+        "chat_id": "ea5a1c05181a",
+        "chat_name": null,
+        "thread_id": null,
+        "user_id": null
+      },
+      "enabled_toolsets": null,
+      "workdir": null,
+      "fire_claim": null
+    }
+  ]
+}

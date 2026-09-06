@@ -1,0 +1,16 @@
+{
+  "$schema": "https://opencode.ai/config.json",
+  "model": "opencode-go/ox-alpha-free",
+  "small_model": "opencode-go/ox-alpha-free",
+  "plugin": [
+    [
+      "@vectorize-io/opencode-hindsight",
+      {
+        "hindsightApiUrl": "http://127.0.0.1:8888",
+        "bankId": "code",
+        "retainTags": ["project:{gitProject}", "env:work"],
+        "retainMetadata": { "repo": "{gitProject}" }
+      }
+    ]
+  ]
+}

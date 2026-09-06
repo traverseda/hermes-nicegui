@@ -1,0 +1,147 @@
+{
+  "3 egg omelette": {
+    "carbs": 1,
+    "confidence": "estimated",
+    "fat": 14,
+    "kcal": 216,
+    "protein": 19,
+    "source": "2026-08-13"
+  },
+  "3 egg omelette (20g cheese, 1 tbsp butter)": {
+    "carbs": 1,
+    "confidence": "estimated",
+    "fat": 32,
+    "kcal": 396,
+    "protein": 24,
+    "source": "2026-08-13"
+  },
+  "3 egg omelette (45g cheese, 1 tbsp butter)": {
+    "carbs": 1,
+    "confidence": "estimated",
+    "fat": 41,
+    "kcal": 496,
+    "protein": 29,
+    "source": "2026-08-13"
+  },
+  "85/15 beef patty 1/3 lb cooked": {
+    "carbs": 0,
+    "confidence": "estimated",
+    "fat": 20,
+    "kcal": 300,
+    "protein": 28,
+    "source": "2026-08-12"
+  },
+  "Bothwell cheese 45g": {
+    "carbs": 0,
+    "confidence": "weighed",
+    "fat": 15,
+    "kcal": 180,
+    "protein": 10,
+    "source": "2026-08-12"
+  },
+  "Costco garlic naan": {
+    "carbs": 45,
+    "confidence": "estimated",
+    "fat": 5,
+    "kcal": 260,
+    "protein": 8,
+    "source": "2026-08-11"
+  },
+  "Costco hot dog": {
+    "carbs": 46,
+    "confidence": "weighed",
+    "fat": 33,
+    "kcal": 570,
+    "protein": 24,
+    "source": "2026-08-11"
+  },
+  "El Monterey breakfast burrito": {
+    "carbs": 31,
+    "confidence": "weighed",
+    "fat": 13,
+    "kcal": 280,
+    "protein": 10,
+    "source": "2026-08-12"
+  },
+  "Goldfish 200g bag": {
+    "carbs": 133,
+    "confidence": "weighed",
+    "fat": 33,
+    "kcal": 933,
+    "protein": 20,
+    "source": "2026-08-11"
+  },
+  "Homemade butter chicken + rice (~340g)": {
+    "carbs": 47,
+    "confidence": "estimated",
+    "fat": 22,
+    "kcal": 575,
+    "protein": 40,
+    "source": "2026-08-12"
+  },
+  "Kirkland chicken bite chunks 240g": {
+    "carbs": 26,
+    "confidence": "weighed",
+    "fat": 19,
+    "kcal": 432,
+    "protein": 43,
+    "source": "2026-08-14"
+  },
+  "banana (medium)": {
+    "carbs": 27,
+    "confidence": "estimated",
+    "fat": 0,
+    "kcal": 105,
+    "protein": 1,
+    "source": "2026-08-12"
+  },
+  "banana bread honey (whole loaf)": {
+    "carbs": 366,
+    "confidence": "estimated",
+    "fat": 80,
+    "kcal": 2287,
+    "protein": 36,
+    "source": "2026-08-12",
+    "total_weight": 758
+  },
+  "costco hot dog no bun (8in all-beef, air-fried)": {
+    "carbs": 4,
+    "confidence": "weighed",
+    "fat": 31,
+    "kcal": 370,
+    "protein": 16,
+    "source": "2026-08-14"
+  },
+  "hamburger (standard: 1/3lb 85/15 + Bothwell 45g + 2 sourdough)": {
+    "carbs": 36,
+    "confidence": "estimated",
+    "fat": 37,
+    "kcal": 660,
+    "protein": 45,
+    "source": "2026-08-12"
+  },
+  "sourdough bread 2 slices": {
+    "carbs": 36,
+    "confidence": "weighed",
+    "fat": 2,
+    "kcal": 180,
+    "protein": 7,
+    "source": "2026-08-12"
+  },
+  "supreme luxe box (chalupa supreme, beefy 5-layer burrito, crunchy taco, chips & cheese)": {
+    "carbs": 125,
+    "confidence": "estimated",
+    "fat": 54,
+    "kcal": 1220,
+    "protein": 50,
+    "source": "2026-08-13"
+  },
+  "teriyaki sauce 1 tbsp": {
+    "carbs": 7,
+    "confidence": "estimated",
+    "fat": 0,
+    "kcal": 30,
+    "protein": 1,
+    "source": "2026-08-14"
+  }
+}

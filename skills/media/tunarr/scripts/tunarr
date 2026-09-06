@@ -1,0 +1,832 @@
+#!/usr/bin/env -S uv run --script
+# /// script
+# dependencies = ["httpx", "rich", "typer"]
+# ///
+"""
+Tunarr CLI — manage virtual live TV at tv.0u0.ca
+
+Usage:
+  tunarr channels list
+  tunarr channels shows              # List unique shows per channel
+  tunarr library genres <genre>      # Browse shows by genre
+  tunarr library find <name>         # Search shows (structured, returns UUID)
+  tunarr schedule slots <ch> --config <file>  # Apply balanced slot schedule
+  tunarr schedule save <ch> --shows "Show1,Show2,..."  # Build+save config inline
+  tunarr schedule batch              # Apply saved configs to all channels
+  tunarr schedule list               # List saved configs
+  tunarr guide
+"""
+
+import json
+import os
+import sys
+import time
+from datetime import datetime, timezone, timedelta
+from pathlib import Path
+from typing import Optional
+
+import httpx
+import typer
+from rich import print as rprint
+from rich.console import Console
+from rich.table import Table
+
+app = typer.Typer(help="Tunarr CLI — manage virtual live TV at tv.0u0.ca")
+console = Console()
+
+# ── Credentials ────────────────────────────────────────────────────
+BASE_URL = "https://tv.0u0.ca"
+
+JELLYFIN_URL = "https://jelly.0u0.ca"
+JELLYFIN_USER_ID = "5493cb350dc4474ba66c027b0631bf66"
+
+MEDIA_SOURCE_ID = "dc16464d-81d0-4e97-8718-c6e46871b487"
+SHOWS_LIBRARY_ID = "1a1b54f0-d6b9-42b1-a6a1-3850f788781a"
+MOVIES_LIBRARY_ID = "75abbe64-b8dd-4ecf-979f-e3ebe3c98dd7"
+
+
+def _load_creds() -> dict:
+    """Load runtime credentials from ~/.hermes/internal-creds.json.
+
+    Falls back to the TUNARR_USERNAME / TUNARR_PASSWORD / JELLYFIN_API_KEY
+    environment variables when the file or a key is missing. A missing or
+    unreadable file fails loudly with a clear error when no env var covers it.
+    """
+    path = os.path.expanduser("~/.hermes/internal-creds.json")
+    try:
+        with open(path) as f:
+            return json.load(f)
+    except (OSError, json.JSONDecodeError) as e:
+        raise RuntimeError(f"Could not read credentials file {path}: {e}") from e
+
+
+def _get_secret(creds: dict, file_key: str, env_key: str) -> str:
+    """Return a credential from the creds file, falling back to the environment."""
+    if file_key in creds:
+        return creds[file_key]
+    env_value = os.environ.get(env_key)
+    if env_value:
+        return env_value
+    raise RuntimeError(
+        f"Missing credential {file_key!r} in {os.path.expanduser('~/.hermes/internal-creds.json')} "
+        f"and no {env_key} env var set"
+    )
+
+
+try:
+    _CREDS = _load_creds()
+except RuntimeError:
+    _CREDS = {}
+
+USERNAME = _get_secret(_CREDS, "username", "TUNARR_USERNAME")
+PASSWORD = _get_secret(_CREDS, "password", "TUNARR_PASSWORD")
+JELLYFIN_API_KEY = _get_secret(_CREDS, "jellyfin", "JELLYFIN_API_KEY")
+
+# ── Saved schedules directory ──────────────────────────────────────
+SCHED_DIR = Path.home() / ".hermes" / "data" / "tunarr" / "schedules"
+
+
+# ── HTTP Client ────────────────────────────────────────────────────
+def client() -> httpx.Client:
+    return httpx.Client(auth=(USERNAME, PASSWORD), base_url=BASE_URL, timeout=30)
+
+
+def jf_client() -> httpx.Client:
+    return httpx.Client(headers={"X-Emby-Token": JELLYFIN_API_KEY}, base_url=JELLYFIN_URL, timeout=30)
+
+
+# ── Helpers ────────────────────────────────────────────────────────
+def resolve_channel(c: httpx.Client, ident: str) -> dict | None:
+    """Resolve channel ID, number string, or name to a channel dict."""
+    ch_list = c.get("/api/channels").json()
+    matches = [x for x in ch_list if x["id"] == ident or str(x["number"]) == ident or x["name"] == ident]
+    return matches[0] if matches else None
+
+
+def resolve_show(c: httpx.Client, name: str, is_movie: bool = False) -> dict | None:
+    """Resolve a show/movie name to a result dict (title, uuid). Returns None if not found."""
+    import re
+    lib_id = MOVIES_LIBRARY_ID if is_movie else SHOWS_LIBRARY_ID
+    target_type = "movie" if is_movie else "show"
+
+    def _try_search(query: str) -> dict | None:
+        resp = c.post("/api/programs/search", json={
+            "mediaSourceId": MEDIA_SOURCE_ID,
+            "libraryId": lib_id,
+            "query": {
+                "filter": {"type": "value", "fieldSpec": {"key": "title", "op": "contains", "type": "string", "value": [query]}},
+                "limit": 10,
+            },
+        })
+        if resp.status_code != 200:
+            return None
+        results = [r for r in resp.json().get("results", []) if r.get("type") == target_type]
+        return results[0] if results else None
+
+    # Try exact name first
+    result = _try_search(name)
+    if result:
+        return result
+
+    # Try without year suffix e.g. "Show Name (2020)" -> "Show Name"
+    stripped = re.sub(r'\s*\(\d{4}\)\s*\(\d{4}\)$', '', name)  # double year
+    stripped = re.sub(r'\s*\(\d{4}\)$', '', stripped)  # single year
+    if stripped != name:
+        result = _try_search(stripped)
+        if result:
+            return result
+
+    # Try just the base name (first meaningful part before any year)
+    stripped = re.sub(r'\s*\(\d{4}\)[\s\S]*$', '', name)
+    if stripped != name:
+        result = _try_search(stripped)
+        if result:
+            return result
+
+    return None
+
+
+def build_slot_config(shows: list[str], is_movie: bool = False) -> dict | None:
+    """Build a slot config dict from a list of show names. Returns config or None if any not found."""
+    c = client()
+    slots = []
+    for name in shows:
+        result = resolve_show(c, name, is_movie)
+        if result:
+            slots.append({
+                "type": "show",
+                "show": result["title"],
+                "order": "next",
+                "weight": 1,
+                "cooldownMs": 0,
+            })
+        else:
+            rprint(f"[red]  ✗ Not found:[/red] {name}")
+            return None
+    return {
+        "type": "random",
+        "flexPreference": "distribute",
+        "padMs": 0,
+        "padStyle": "slot",
+        "distribution": "uniform",
+        "slots": slots,
+    }
+
+
+def apply_slots(c: httpx.Client, ch: dict, config: dict):
+    """Generate and save a balanced slot lineup for a channel."""
+    import uuid as uuid_mod
+    payload = {
+        "schedule": {
+            "type": "random",
+            "flexPreference": config.get("flexPreference", "distribute"),
+            "maxDays": 31,
+            "padMs": config.get("padMs", 0),
+            "padStyle": config.get("padStyle", "slot"),
+            "randomDistribution": config.get("distribution", config.get("randomDistribution", "uniform")),
+            "slots": [],
+        }
+    }
+
+    # Build slots — resolve show names to UUIDs
+    for entry in config.get("slots", []):
+        slot_type = entry.get("type", "show")
+        slot = {"type": slot_type, "id": str(uuid_mod.uuid4())}
+        slot["weight"] = entry.get("weight", 1)
+        slot["cooldownMs"] = entry.get("cooldownMs", 0)
+
+        # reasoning is for in-file documentation only; strip before API call
+        entry.pop("reasoning", None)
+
+        if slot_type == "show":
+            show_name = entry.get("show", "")
+            result = resolve_show(c, show_name)
+            if not result:
+                rprint(f"[red]  ✗ Show '{show_name}' not found, skipping[/red]")
+                continue
+            slot["showId"] = result["uuid"]
+            slot["order"] = entry.get("order", "next")
+        elif slot_type == "movie":
+            movie_name = entry.get("movie", entry.get("show", ""))
+            if movie_name:
+                result = resolve_show(c, movie_name, is_movie=True)
+                if result:
+                    slot["movieId"] = result["uuid"]
+            slot["order"] = entry.get("order", "next")
+        payload["schedule"]["slots"].append(slot)
+
+    if not payload["schedule"]["slots"]:
+        rprint("[red]No valid slots to schedule.[/red]")
+        return
+
+    # Generate lineup
+    resp = c.post(f"/api/channels/{ch['id']}/schedule-slots", json=payload)
+    resp.raise_for_status()
+    lineup = resp.json().get("lineup", [])
+    if not lineup:
+        rprint(f"[red]No lineup generated for {ch['name']}.[/red]")
+        return
+
+    content_count = sum(1 for l in lineup if l.get("type") == "content")
+    total_hours = sum(l.get("duration", 0) for l in lineup) / 3600000
+
+    # Save
+    c.post(f"/api/channels/{ch['id']}/programming", json={"type": "manual", "lineup": [], "append": False})
+    c.post(f"/api/channels/{ch['id']}/programming", json={"type": "manual", "lineup": lineup, "append": False})
+
+    rprint(f"  [green]✓[/green] {ch['name']}: {content_count} episodes, {total_hours:.1f}h ({len(payload['schedule']['slots'])} shows)")
+
+
+# ═══════════════════════════════════════════════════════════════════
+# CHANNELS
+# ═══════════════════════════════════════════════════════════════════
+@app.command("channels")
+def channels_cmd(
+    action: str = typer.Argument("list", help="list|create|delete|get|programming|shows|set-icon"),
+    channel_id: str = typer.Argument(None, help="Channel ID or channel name"),
+    name: str = typer.Option(None, "--name", "-n", help="Channel name (create)"),
+    number: int = typer.Option(1, "--number", "-N", help="Channel number (create)"),
+    group: str = typer.Option("tunarr", "--group", "-g", help="Group title"),
+    stream: str = typer.Option("hls", "--stream", help="Stream mode"),
+    stealth: bool = False,
+    force: bool = typer.Option(False, "--force", "-f", help="Skip confirmation (delete all)"),
+):
+    """Manage channels: list, create, delete, get, programming, shows, set-icon."""
+    c = client()
+    ch_list = c.get("/api/channels").json()
+    ch = resolve_channel(c, channel_id) if channel_id else None
+
+    if action == "list":
+        if not ch_list:
+            rprint("[yellow]No channels found.[/yellow]")
+            return
+        table = Table(title="Tunarr Channels")
+        table.add_column("#", style="cyan")
+        table.add_column("Name", style="green")
+        table.add_column("ID", style="dim")
+        table.add_column("Programs", justify="right")
+        table.add_column("Stream", style="blue")
+        for ch_entry in ch_list:
+            table.add_row(
+                str(ch_entry.get("number", "?")),
+                ch_entry.get("name", "Unnamed"),
+                ch_entry.get("id", "")[:8] + "...",
+                str(ch_entry.get("programCount", 0)),
+                ch_entry.get("streamMode", "?"),
+            )
+        rprint(table)
+
+    elif action == "create":
+        import uuid as uuid_mod
+        payload = {
+            "type": "new",
+            "channel": {
+                "duration": 0,
+                "icon": {"duration": 0, "path": "", "position": "bottom-right", "width": 0, "useDefaultIconFallback": True},
+                "guideMinimumDuration": 30000,
+                "fillerRepeatCooldown": 30000,
+                "groupTitle": group, "stealth": stealth, "disableFillerOverlay": False,
+                "offline": {"mode": "pic", "picture": "", "soundtrack": ""},
+                "onDemand": {"enabled": False}, "programCount": 0, "streamMode": stream,
+                "subtitlesEnabled": False,
+                "id": str(uuid_mod.uuid4()),
+                "name": name or channel_id or "New Channel",
+                "number": number,
+                "startTime": int(time.time() * 1000),
+                "transcodeConfigId": "2939960a-a294-4f39-8d33-848fad09b59a",
+                "fillerCollections": [],
+                "watermark": {"enabled": False, "url": "", "width": 10,
+                             "horizontalMargin": 1, "verticalMargin": 1,
+                             "fixedSize": False, "animated": False,
+                             "duration": 0, "position": "bottom-right", "opacity": 100},
+            },
+        }
+        resp = c.post("/api/channels", json=payload)
+        if resp.status_code == 201:
+            created = resp.json()
+            rprint(f"[green]Created:[/green] #{created.get('number')} {created.get('name')}")
+            rprint(f"  ID: {created.get('id')}")
+        else:
+            rprint(f"[red]Failed:[/red] {resp.status_code} {resp.text}")
+
+    elif action == "delete":
+        if channel_id == "all":
+            if not force:
+                rprint(f"[yellow]Delete {len(ch_list)} channels:[/yellow] {', '.join(ch.get('name','?') for ch in ch_list)}")
+                typer.confirm("Continue?", abort=True)
+            for ch_entry in ch_list:
+                c.delete(f"/api/channels/{ch_entry['id']}")
+                rprint(f"  [red]Deleted[/red] #{ch_entry.get('number')} {ch_entry.get('name')}")
+            rprint(f"[green]Deleted {len(ch_list)} channels.[/green]")
+        else:
+            if not ch:
+                rprint(f"[red]No channel matching '{channel_id}'.[/red]")
+                return
+            c.delete(f"/api/channels/{ch['id']}")
+            rprint(f"[green]Deleted channel {ch['name']}[/green]")
+
+    elif action == "get":
+        if not ch:
+            rprint(f"[red]No channel matching '{channel_id}'.[/red]")
+            return
+        rprint(ch)
+
+    elif action == "programming":
+        if not ch:
+            rprint(f"[red]No channel matching '{channel_id}'.[/red]")
+            return
+        data = c.get(f"/api/channels/{ch['id']}/programming").json()
+        rprint(f"Channel: [green]{data.get('name')}[/green] (#{data.get('number')})")
+        rprint(f"Programs: [cyan]{data.get('totalPrograms', 0)}[/cyan]")
+        rprint(f"Lineup: [cyan]{len(data.get('lineup', []))}[/cyan] items")
+
+    elif action == "shows":
+        """List what shows are programmed in each channel."""
+        table = Table(title="Channel Contents")
+        table.add_column("#", style="cyan")
+        table.add_column("Name", style="green")
+        table.add_column("Progs", justify="right")
+        table.add_column("Shows")
+        for ch_entry in ch_list:
+            prog = c.get(f"/api/channels/{ch_entry['id']}/programming")
+            if prog.status_code != 200:
+                continue
+            pd = prog.json()
+            total = pd.get('totalPrograms', 0)
+            programs = pd.get('programs', {})
+            titles = sorted(set(
+                p.get('program', {}).get('showTitle', p.get('program', {}).get('title', ''))
+                for p in programs.values()
+                if p.get('program', {}).get('showTitle', p.get('program', {}).get('title', ''))
+            ))
+            display = ', '.join(titles[:5])
+            if len(titles) > 5:
+                display += f' ... (+{len(titles)-5})'
+            table.add_row(str(ch_entry['number']), ch_entry['name'], str(total), display)
+        rprint(table)
+
+    elif action == "set-icon":
+        path = channel_id
+        target_number = name
+        if not ch:
+            if len(ch_list) == 1:
+                ch = ch_list[0]
+            elif target_number:
+                ch = resolve_channel(c, target_number)
+            else:
+                table = Table(title="Select channel")
+                table.add_column("#", style="cyan")
+                table.add_column("Name", style="green")
+                table.add_column("ID")
+                for ch_entry in ch_list:
+                    table.add_row(str(ch_entry["number"]), ch_entry["name"], ch_entry["id"])
+                rprint(table)
+                choice = typer.prompt("Enter channel number or name")
+                ch = resolve_channel(c, choice)
+        if not ch:
+            rprint("[red]No channel selected.[/red]")
+            return
+        if not os.path.exists(path):
+            rprint(f"[red]File not found: {path}[/red]")
+            return
+        with open(path, "rb") as f:
+            upload = c.post("/api/upload/image", files={"file": (os.path.basename(path), f, "image/png")})
+        if upload.status_code != 200:
+            rprint(f"[red]Upload failed:[/red] {upload.status_code} {upload.text}")
+            return
+        file_url = upload.json()["fileUrl"]
+        # Swap external auth-gated URL for internal Docker URL so IPTV players can fetch it
+        file_url = file_url.replace("http://tv.0u0.ca", "http://tunarr:8000")
+        rprint(f"  Uploaded -> [dim]{file_url}[/dim]")
+        ch["icon"] = {"path": file_url, "width": 0, "duration": 0, "position": "bottom-right"}
+        resp = c.put(f"/api/channels/{ch['id']}", json=ch)
+        if resp.status_code == 200:
+            rprint(f"[green]Icon set on #{ch['number']} {ch['name']}[/green]")
+        else:
+            rprint(f"[red]Failed:[/red] {resp.status_code} {resp.text}")
+
+
+# ═══════════════════════════════════════════════════════════════════
+# LIBRARY
+# ═══════════════════════════════════════════════════════════════════
+@app.command("library")
+def library_cmd(
+    action: str = typer.Argument("status", help="status|browse|genres|find"),
+    arg: str = typer.Argument(None, help="Library name (browse), genre (genres), or search query (find)"),
+    limit: int = typer.Option(50, "--limit", "-l"),
+    list_genres: bool = typer.Option(False, "--list", "-L", help="List all genres with counts (genres action)"),
+):
+    """Browse Jellyfin library: status, browse by genre, find shows by name."""
+    c = client()
+
+    if action == "status":
+        resp = c.get("/api/media-sources")
+        resp.raise_for_status()
+        for ms in resp.json():
+            rprint(f"Source: [green]{ms['name']}[/green] ({ms['type']})")
+            for lib in ms.get("libraries", []):
+                s = c.get(f"/api/media-sources/{ms['id']}/{lib['id']}/status")
+                if s.status_code == 200:
+                    st = s.json()
+                    state = st.get("state", "unknown")
+                    pct = st.get("percentComplete", 0)
+                    icons = {"in_progress": "🔄", "complete": "✅", "queued": "⏳", "error": "❌"}
+                    rprint(f"  {icons.get(state, '❓')} {lib['name']}: [cyan]{state}[/cyan] {pct:.0f}%")
+                else:
+                    rprint(f"  {lib['name']}: [yellow]unknown[/yellow]")
+
+    elif action == "browse":
+        libs = {"shows": ("a656b907eb3a73532e40e44b968d0225", "Series"), "movies": ("f137a2dd21bbc1b99aa5c0f6bf02a805", "Movie")}
+        lib_info = libs.get(arg or "shows")
+        if not lib_info:
+            rprint(f"[red]Unknown library: {arg}. Use 'shows' or 'movies'.[/red]")
+            return
+        parent_id, item_type = lib_info
+        url = (f"/Users/{JELLYFIN_USER_ID}/Items?ParentId={parent_id}"
+               f"&IncludeItemTypes={item_type}&Recursive=true"
+               f"&Fields=Genres,ProductionYear,Overview,Status&Limit={limit}&SortBy=SortName")
+        with jf_client() as jc:
+            resp = jc.get(url)
+            resp.raise_for_status()
+            data = resp.json()
+        rprint(f"Total: [cyan]{data.get('TotalRecordCount', 0)}[/cyan] items (showing {len(data.get('Items', []))})")
+        for item in data.get("Items", []):
+            g = ", ".join(item.get("Genres", [])[:3])
+            year = item.get("ProductionYear", "")
+            overview = item.get("Overview", "")
+            snippet = (overview[:80] + "...") if overview else ""
+            rprint(f"  {item['Name']} ({year})  [dim]{g}[/dim]")
+            if snippet:
+                rprint(f"    [italic]{snippet}[/italic]")
+
+    elif action == "genres":
+        """List shows by genre. Pass genre name as arg, or --list to see all genres."""
+        if list_genres:
+            # Fetch all shows and aggregate genres
+            url = (f"/Users/{JELLYFIN_USER_ID}/Items?ParentId=a656b907eb3a73532e40e44b968d0225"
+                   f"&IncludeItemTypes=Series&Recursive=true"
+                   f"&Fields=Genres&Limit=500&SortBy=SortName")
+            with jf_client() as jc:
+                resp = jc.get(url)
+                resp.raise_for_status()
+                data = resp.json()
+            from collections import Counter
+            counts = Counter()
+            for item in data.get("Items", []):
+                for g in item.get("Genres", []):
+                    counts[g] += 1
+            rprint("[bold]All Genres[/bold]")
+            for g, n in sorted(counts.items(), key=lambda x: -x[1]):
+                rprint(f"  {g}: [cyan]{n}[/cyan]")
+            rprint(f"\nTotal series: [cyan]{data.get('TotalRecordCount', 0)}[/cyan]")
+            return
+
+        genre = arg
+        if not genre:
+            rprint("[red]Usage: tunarr library genres <genre> or --list[/red]")
+            return
+        url = (f"/Users/{JELLYFIN_USER_ID}/Items?ParentId=a656b907eb3a73532e40e44b968d0225"
+               f"&IncludeItemTypes=Series&Recursive=true"
+               f"&Fields=Genres,ProductionYear&Limit={limit}&SortBy=SortName"
+               f"&Genres={genre}")
+        with jf_client() as jc:
+            resp = jc.get(url)
+            resp.raise_for_status()
+            data = resp.json()
+        total = data.get('TotalRecordCount', 0)
+        rprint(f"[bold]{genre}[/bold]: [cyan]{total}[/cyan] shows (showing {len(data.get('Items', []))})")
+        for item in data.get("Items", []):
+            year = item.get("ProductionYear", "")
+            rprint(f"  {item['Name']} ({year})")
+
+    elif action == "find":
+        """Find shows by name using structured search. Returns UUIDs."""
+        query = arg
+        if not query:
+            rprint("[red]Usage: tunarr library find <search query>[/red]")
+            return
+        resp = c.post("/api/programs/search", json={
+            "mediaSourceId": MEDIA_SOURCE_ID,
+            "libraryId": SHOWS_LIBRARY_ID,
+            "query": {"filter": {"type": "value", "fieldSpec": {"key": "title", "op": "contains", "type": "string", "value": [query]}}, "limit": limit},
+        })
+        resp.raise_for_status()
+        results = [r for r in resp.json().get("results", []) if r.get("type") == "show"]
+        if not results:
+            rprint(f"[yellow]No shows found matching '{query}'.[/yellow]")
+            return
+        rprint(f"Found [cyan]{len(results)}[/cyan] shows matching '{query}':")
+        for r in results:
+            rprint(f"  {r['title']} ({r.get('year','')})  [dim]{r['uuid']}[/dim]")
+
+
+# ═══════════════════════════════════════════════════════════════════
+# MEDIA SOURCES
+# ═══════════════════════════════════════════════════════════════════
+@app.command("media-sources")
+def ms_cmd(action: str = typer.Argument("list", help="list|enable|scan")):
+    """Manage media sources."""
+    c = client()
+    if action == "list":
+        for ms in c.get("/api/media-sources").json():
+            rprint(f"Source: [green]{ms['name']}[/green] ({ms['type']})")
+            for lib in ms.get("libraries", []):
+                enabled = "✅" if lib.get("enabled") else "❌"
+                rprint(f"  {enabled} {lib['name']} ({lib['mediaType']})")
+    elif action == "enable":
+        payload = {
+            "id": MEDIA_SOURCE_ID, "name": "jelly.0u0.ca",
+            "uri": "http://jellyfin:8096",
+            "accessToken": JELLYFIN_API_KEY,
+            "userId": JELLYFIN_USER_ID, "username": "cody",
+            "type": "jellyfin", "pathReplacements": [],
+            "libraries": [
+                {"id": SHOWS_LIBRARY_ID, "name": "Shows", "mediaType": "shows",
+                 "externalKey": "a656b907eb3a73532e40e44b968d0225", "type": "jellyfin",
+                 "enabled": True, "isLocked": False},
+                {"id": MOVIES_LIBRARY_ID, "name": "Movies", "mediaType": "movies",
+                 "externalKey": "f137a2dd21bbc1b99aa5c0f6bf02a805", "type": "jellyfin",
+                 "enabled": True, "isLocked": False},
+            ],
+        }
+        resp = c.put(f"/api/media-sources/{MEDIA_SOURCE_ID}", json=payload)
+        if resp.status_code == 200:
+            rprint("[green]Libraries enabled.[/green]")
+        else:
+            rprint(f"[red]Failed:[/red] {resp.status_code} {resp.text}")
+    elif action == "scan":
+        """Trigger a library scan to pick up new shows in Tunarr's index."""
+        for lib_id, lib_name in [(SHOWS_LIBRARY_ID, "Shows"), (MOVIES_LIBRARY_ID, "Movies")]:
+            resp = c.post(f"/api/media-sources/{MEDIA_SOURCE_ID}/libraries/{lib_id}/scan")
+            if resp.status_code == 202:
+                rprint(f"[green]✓[/green] {lib_name}: scan triggered")
+            else:
+                rprint(f"[yellow]✗[/yellow] {lib_name}: {resp.status_code} {resp.text}")
+
+
+# ═══════════════════════════════════════════════════════════════════
+# GUIDE
+# ═══════════════════════════════════════════════════════════════════
+@app.command("guide")
+def guide_cmd(date_from: str = typer.Option(None, "--from"), date_to: str = typer.Option(None, "--to")):
+    """Show the TV guide."""
+    if not date_from:
+        date_from = datetime.now(timezone.utc).strftime("%Y-%m-%dT00:00:00.000Z")
+    if not date_to:
+        date_to = (datetime.now(timezone.utc) + timedelta(days=1)).strftime("%Y-%m-%dT00:00:00.000Z")
+    with client() as c:
+        data = c.get(f"/api/guide/channels?dateFrom={date_from}&dateTo={date_to}").json()
+    for ch_id, ch_data in data.items():
+        rprint(f"\n[bold]{ch_data.get('name', 'Unnamed')}[/bold] (#{ch_data.get('number', '?')})")
+        for prog in ch_data.get("programs", [])[:10]:
+            dur = prog.get("duration", 0) / 1000
+            rprint(f"  {prog.get('title', 'Untitled')}  ({dur:.0f}s)")
+
+
+# ═══════════════════════════════════════════════════════════════════
+# PROGRAMS
+# ═══════════════════════════════════════════════════════════════════
+@app.command("programs")
+def programs_cmd(
+    action: str = typer.Argument("search", help="search|add|remove"),
+    query: str = typer.Argument(None, help="Search query"),
+    channel_id: str = typer.Option(None, "--channel", "-c", help="Channel ID (add/remove)"),
+    type_filter: str = typer.Option(None, "--type", "-t", help="Filter"),
+    limit: int = typer.Option(20, "--limit", "-l"),
+    show_name: str = typer.Option(None, "--show", "-s", help="Show name (add/remove)"),
+    append: bool = typer.Option(True, "--append"),
+):
+    """Search programs, add them to a channel, or remove a show from a channel."""
+    c = client()
+    if action == "search":
+        search_body = {"query": {"search": query, "limit": limit}}
+        if type_filter:
+            search_body["query"]["type"] = type_filter
+        resp = c.post("/api/programs/search", json=search_body)
+        resp.raise_for_status()
+        data = resp.json()
+        results = data.get("results", [])
+        rprint(f"Found [cyan]{data.get('totalHits', len(results))}[/cyan] hits (showing {len(results)})")
+        for r in results:
+            t = r.get("type", "?")
+            title = r.get("title", "Unnamed")
+            uuid = r.get("uuid", "")[:8]
+            year = r.get("year", "")
+            show = r.get("showTitle", "")
+            extra = f" [{show}]" if show else ""
+            rprint(f"  [{t:8}] {title} ({year}){extra}  [dim]{uuid}...[/dim]")
+    elif action == "add":
+        if not channel_id:
+            rprint("[red]--channel is required[/red]")
+            return
+        ch = resolve_channel(c, channel_id)
+        if not ch:
+            rprint(f"[red]No channel matching '{channel_id}'.[/red]")
+            return
+        search_q = show_name or query
+        result = resolve_show(c, search_q)
+        if not result:
+            rprint(f"[yellow]Show '{search_q}' not found.[/yellow]")
+            return
+        show_uuid = result["uuid"]
+        rprint(f"Found show: [green]{result['title']}[/green] ({show_uuid[:16]}...)")
+        desc_resp = c.get(f"/api/programs/{show_uuid}/descendants")
+        desc_resp.raise_for_status()
+        episodes = [d for d in desc_resp.json() if d.get("type") == "content" and d.get("id")]
+        if not episodes:
+            rprint("[yellow]No episodes found.[/yellow]")
+            return
+        rprint(f"Found [cyan]{len(episodes)}[/cyan] episodes")
+        lineup = [{"type": "content", "id": ep["id"],
+                   "duration": ep.get("duration", 0), "durationMs": ep.get("duration", 0)}
+                  for ep in episodes[:limit]]
+        resp = c.post(f"/api/channels/{ch['id']}/programming",
+                       json={"type": "manual", "lineup": lineup, "append": append})
+        if resp.status_code in (200, 201):
+            rprint(f"[green]Added {len(lineup)} programs to {ch['name']}.[/green]")
+        else:
+            rprint(f"[red]Failed:[/red] {resp.status_code} {resp.text}")
+
+    elif action == "remove":
+        """Remove all programs for a show from a channel."""
+        if not channel_id:
+            rprint("[red]--channel is required[/red]")
+            return
+        if not show_name:
+            rprint("[red]--show is required[/red]")
+            return
+        ch = resolve_channel(c, channel_id)
+        if not ch:
+            rprint(f"[red]No channel matching '{channel_id}'.[/red]")
+            return
+
+        # Get current programming
+        prog = c.get(f"/api/channels/{ch['id']}/programming")
+        if prog.status_code != 200:
+            rprint(f"[red]Failed to get programming: {prog.status_code}[/red]")
+            return
+        pd = prog.json()
+
+        lineup = pd.get("lineup", [])
+        programs = pd.get("programs", {})
+
+        # Find IDs to remove
+        to_remove = set()
+        for pid, pdata in programs.items():
+            prog_info = pdata.get("program", {})
+            st = (prog_info.get("showTitle", "") or "").lower()
+            if show_name.lower() in st:
+                to_remove.add(pid)
+
+        if not to_remove:
+            rprint(f"[yellow]No programs found for '{show_name}' on {ch['name']}.[/yellow]")
+            return
+
+        # Filter lineup
+        new_lineup = [item for item in lineup if item.get("id") not in to_remove]
+        removed_count = len(lineup) - len(new_lineup)
+
+        if removed_count == 0:
+            rprint(f"[yellow]Could not match lineup items to remove.[/yellow]")
+            return
+
+        # Replace programming
+        resp = c.post(f"/api/channels/{ch['id']}/programming",
+                      json={"type": "manual", "lineup": new_lineup, "append": False})
+        if resp.status_code in (200, 201):
+            rprint(f"[green]Removed {removed_count} programs for '{show_name}' from {ch['name']}.[/green]")
+            rprint(f"  Remaining: {len(new_lineup)} programs")
+        else:
+            rprint(f"[red]Failed:[/red] {resp.status_code} {resp.text}")
+
+
+# ═══════════════════════════════════════════════════════════════════
+# SCHEDULE — Balanced slot scheduling (no dead air, no blocks)
+# ═══════════════════════════════════════════════════════════════════
+@app.command("schedule")
+def schedule_cmd(
+    action: str = typer.Argument("slots", help="slots|save|batch|list"),
+    channel_id: str = typer.Argument(None, help="Channel ID, number, or name"),
+    config: str = typer.Option(None, "--config", "-c", help="Path to JSON config file"),
+    shows: str = typer.Option(None, "--shows", "-s", help="Comma-separated show names (for 'save')"),
+    distribution: str = typer.Option("uniform", "--dist", help="uniform|weighted"),
+):
+    """Manage balanced slot schedules.
+
+    Actions:
+      slots  <ch> --config <file>  — Apply a saved config to one channel
+      save   <ch> --shows "A,B,C" — Build+save a slot config from show names
+      batch                         — Apply all saved configs to all channels
+      list                          — List saved configs
+    """
+    c = client()
+
+    if action == "list":
+        if not SCHED_DIR.exists():
+            rprint("[yellow]No saved schedules yet.[/yellow]")
+            return
+        configs = sorted(SCHED_DIR.glob("*.json"))
+        if not configs:
+            rprint("[yellow]No saved schedules found.[/yellow]")
+            return
+        table = Table(title="Saved Slot Configs")
+        table.add_column("Channel", style="green")
+        table.add_column("Shows")
+        table.add_column("File")
+        for config_path in configs:
+            with open(config_path) as f:
+                data = json.load(f)
+            show_names = [s.get("show", "?") for s in data.get("slots", [])]
+            table.add_row(config_path.stem, ", ".join(show_names[:4]), config_path.name)
+        rprint(table)
+        return
+
+    if action in ("slots", "apply"):
+        if not channel_id:
+            rprint("[red]Channel ID required.[/red]")
+            return
+        ch = resolve_channel(c, channel_id)
+        if not ch:
+            rprint(f"[red]No channel matching '{channel_id}'.[/red]")
+            return
+
+        # Load config
+        cfg = None
+        if config:
+            cfg = json.loads(Path(config).read_text())
+        else:
+            config_path = SCHED_DIR / f"{ch['name']}.json"
+            if config_path.exists():
+                cfg = json.loads(config_path.read_text())
+            else:
+                rprint(f"[red]No config specified and no saved config for '{ch['name']}'.[/red]")
+                return
+
+        slot_count = len(cfg.get("slots", []))
+        rprint(f"\n[bold]Scheduling {ch['name']}[/bold] ({slot_count} shows)")
+        apply_slots(c, ch, cfg)
+        return
+
+    if action == "save":
+        if not channel_id:
+            rprint("[red]Channel ID required.[/red]")
+            return
+        ch = resolve_channel(c, channel_id)
+        if not ch:
+            rprint(f"[red]No channel matching '{channel_id}'.[/red]")
+            return
+        if not shows:
+            rprint("[red]--shows is required (comma-separated show names).[/red]")
+            return
+
+        import shlex
+        # Split by comma, respecting quoted strings
+        show_list = []
+        for part in shlex.split(shows, posix=False):
+            show_list.extend(s.strip() for s in part.split(",") if s.strip())
+        rprint(f"\n[bold]Building config for {ch['name']}[/bold]")
+        rprint(f"  Resolving {len(show_list)} shows...")
+        cfg = build_slot_config(show_list)
+        if not cfg:
+            rprint("[red]Config build failed — fix the missing shows and retry.[/red]")
+            return
+
+        SCHED_DIR.mkdir(parents=True, exist_ok=True)
+        config_path = SCHED_DIR / f"{ch['name']}.json"
+        with open(config_path, 'w') as f:
+            json.dump(cfg, f, indent=2)
+        rprint(f"  [green]✓[/green] Saved to {config_path}")
+        rprint(f"\nNow apply it with: tunarr schedule slots {channel_id}")
+        return
+
+    if action == "batch":
+        """Apply all saved configs to matching channels."""
+        if not SCHED_DIR.exists():
+            rprint("[red]No saved schedule configs found.[/red]")
+            rprint("  Use 'tunarr schedule save <ch> --shows \"Show1,Show2,...\" first.")
+            return
+
+        configs = sorted(SCHED_DIR.glob("*.json"))
+        if not configs:
+            rprint("[red]No saved configs found.[/red]")
+            return
+
+        rprint(f"[bold]Batch scheduling {len(configs)} channels[/bold]\n")
+        ok = 0
+        for config_path in configs:
+            channel_name = config_path.stem
+            ch = resolve_channel(c, channel_name)
+            if not ch:
+                rprint(f"  [yellow]✗ Channel '{channel_name}' not found, skipping[/yellow]")
+                continue
+            cfg = json.loads(config_path.read_text())
+            apply_slots(c, ch, cfg)
+            ok += 1
+        rprint(f"\n[green]✓ Batch complete: {ok}/{len(configs)} channels scheduled[/green]")
+        return
+
+    rprint(f"[red]Unknown action: {action}. Use: slots, save, batch, list[/red]")
+
+
+if __name__ == "__main__":
+    app()

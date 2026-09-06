@@ -1,0 +1,245 @@
+#!/usr/bin/env -S uv run --script
+# /// script
+# dependencies = ["httpx", "rich"]
+# ///
+"""
+Tunarr Library Diff — compare Jellyfin library state month-to-month.
+
+Saves a snapshot of all shows/movies with their IDs and genres.
+On subsequent runs, diffs against the snapshot and reports new/removed content
+categorized by genre.
+
+Output is designed for cron delivery — concise, actionable.
+"""
+
+import json
+import os
+import sys
+from datetime import datetime
+from pathlib import Path
+from collections import Counter
+
+import httpx
+
+# ── Config ────────────────────────────────────────────────────────
+SNAPSHOT_DIR = Path.home() / ".hermes" / "data" / "tunarr"
+SNAPSHOT_FILE = SNAPSHOT_DIR / "library-snapshot.json"
+DIFF_OUTPUT = SNAPSHOT_DIR / "last-diff.json"
+
+JELLYFIN_URL = "https://jelly.0u0.ca"
+JELLYFIN_USER_ID = "5493cb350dc4474ba66c027b0631bf66"
+
+
+def _load_creds() -> dict:
+    """Load runtime credentials from ~/.hermes/internal-creds.json.
+
+    Falls back to the JELLYFIN_API_KEY environment variable when the file
+    or the 'jellyfin' key is missing. A missing or unreadable file fails
+    loudly with a clear error when no env var covers it.
+    """
+    path = os.path.expanduser("~/.hermes/internal-creds.json")
+    try:
+        with open(path) as f:
+            return json.load(f)
+    except (OSError, json.JSONDecodeError) as e:
+        raise RuntimeError(f"Could not read credentials file {path}: {e}") from e
+
+
+def _get_secret(creds: dict, file_key: str, env_key: str) -> str:
+    """Return a credential from the creds file, falling back to the environment."""
+    if file_key in creds:
+        return creds[file_key]
+    env_value = os.environ.get(env_key)
+    if env_value:
+        return env_value
+    raise RuntimeError(
+        f"Missing credential {file_key!r} in {os.path.expanduser('~/.hermes/internal-creds.json')} "
+        f"and no {env_key} env var set"
+    )
+
+
+try:
+    _CREDS = _load_creds()
+except RuntimeError:
+    _CREDS = {}
+
+JELLYFIN_API_KEY = _get_secret(_CREDS, "jellyfin", "JELLYFIN_API_KEY")
+
+# Library IDs
+SHOWS_PARENT = "a656b907eb3a73532e40e44b968d0225"
+MOVIES_PARENT = "f137a2dd21bbc1b99aa5c0f6bf02a805"
+
+
+def jf() -> httpx.Client:
+    return httpx.Client(
+        headers={"X-Emby-Token": JELLYFIN_API_KEY},
+        base_url=JELLYFIN_URL,
+        timeout=30,
+    )
+
+
+def fetch_all(parent_id: str, item_type: str) -> list[dict]:
+    """Fetch every item from a Jellyfin library (paginated)."""
+    items = []
+    start = 0
+    limit = 200
+    with jf() as c:
+        while True:
+            url = (f"/Users/{JELLYFIN_USER_ID}/Items"
+                   f"?ParentId={parent_id}"
+                   f"&IncludeItemTypes={item_type}"
+                   f"&Recursive=true"
+                   f"&Fields=Genres,ProductionYear,Status"
+                   f"&Limit={limit}&StartIndex={start}"
+                   f"&SortBy=SortName")
+            resp = c.get(url)
+            resp.raise_for_status()
+            data = resp.json()
+            batch = data.get("Items", [])
+            items.extend(batch)
+            total = data.get("TotalRecordCount", 0)
+            start += limit
+            if start >= total:
+                break
+    return items
+
+
+def normalize(items: list[dict], media_type: str) -> dict:
+    """Convert Jellyfin items to a snapshot dict keyed by external ID."""
+    snapshot = {}
+    for item in items:
+        ext_id = item.get("Id", "")
+        snapshot[ext_id] = {
+            "id": ext_id,
+            "name": item.get("Name", ""),
+            "type": media_type,
+            "year": item.get("ProductionYear"),
+            "genres": item.get("Genres", []),
+            "status": item.get("Status", ""),
+        }
+    return snapshot
+
+
+def genre_buckets(snapshot: dict) -> dict[str, list[str]]:
+    """Group item names by genre."""
+    buckets = {}
+    for ext_id, item in snapshot.items():
+        for g in item.get("genres", []):
+            key = g.lower()
+            if key not in buckets:
+                buckets[key] = []
+            buckets[key].append(item["name"])
+    return buckets
+
+
+def run():
+    SNAPSHOT_DIR.mkdir(parents=True, exist_ok=True)
+
+    print("📡 Fetching Jellyfin library...", file=sys.stderr)
+    shows_raw = fetch_all(SHOWS_PARENT, "Series")
+    movies_raw = fetch_all(MOVIES_PARENT, "Movie")
+
+    current = {}
+    current.update(normalize(shows_raw, "show"))
+    current.update(normalize(movies_raw, "movie"))
+
+    print(f"   {len(shows_raw)} shows, {len(movies_raw)} movies ({len(current)} total)", file=sys.stderr)
+
+    # Load previous snapshot
+    previous = {}
+    if SNAPSHOT_FILE.exists():
+        previous = json.loads(SNAPSHOT_FILE.read_text())
+
+    # Diff
+    prev_ids = set(previous.keys())
+    curr_ids = set(current.keys())
+
+    new_ids = curr_ids - prev_ids
+    removed_ids = prev_ids - curr_ids
+
+    new_items = [current[i] for i in sorted(new_ids)]
+    removed_items = [previous[i] for i in sorted(removed_ids)]
+
+    # Genre counts for new items
+    new_genres = Counter()
+    for item in new_items:
+        for g in item.get("genres", []):
+            new_genres[g] += 1
+
+    # ── Output ────────────────────────────────────────────────────
+    print(f"\n{'='*60}")
+    print(f"  Tunarr Library Diff — {datetime.now().strftime('%Y-%m-%d %H:%M')}")
+    print(f"{'='*60}")
+
+    if new_items:
+        print(f"\n🟢 NEW: {len(new_items)} items")
+        print(f"   Genre breakdown: {', '.join(f'{g}({c})' for g, c in new_genres.most_common(10))}")
+        # Group new items by type
+        shows_new = [i for i in new_items if i["type"] == "show"]
+        movies_new = [i for i in new_items if i["type"] == "movie"]
+        if shows_new:
+            print(f"\n   New shows:")
+            for s in shows_new[:15]:
+                g = ", ".join(s["genres"][:3])
+                print(f"     {s['name']} ({s['year']}) [{g}]")
+            if len(shows_new) > 15:
+                print(f"     ... and {len(shows_new) - 15} more")
+        if movies_new:
+            print(f"\n   New movies:")
+            for m in movies_new[:10]:
+                g = ", ".join(m["genres"][:3])
+                print(f"     {m['name']} ({m['year']}) [{g}]")
+            if len(movies_new) > 10:
+                print(f"     ... and {len(movies_new) - 10} more")
+    else:
+        print("\n🟡 No new items since last snapshot.")
+
+    if removed_items:
+        print(f"\n🔴 REMOVED: {len(removed_items)} items")
+        for item in removed_items[:10]:
+            print(f"     {item['name']} ({item['type']})")
+        if len(removed_items) > 10:
+            print(f"     ... and {len(removed_items) - 10} more")
+
+    # Genre bucket changelog
+    prev_buckets = genre_buckets(previous)
+    curr_buckets = genre_buckets(current)
+    changed_genres = []
+    for genre in sorted(set(list(prev_buckets.keys()) + list(curr_buckets.keys()))):
+        old_count = len(prev_buckets.get(genre, []))
+        new_count = len(curr_buckets.get(genre, []))
+        if old_count != new_count:
+            changed_genres.append(f"{genre}: {old_count}→{new_count}")
+
+    if changed_genres:
+        print(f"\n📊 Genre changes:")
+        for cg in changed_genres:
+            print(f"     {cg}")
+
+    # Save current snapshot
+    SNAPSHOT_FILE.write_text(json.dumps(current, indent=2))
+    diff_data = {
+        "timestamp": datetime.now().isoformat(),
+        "new_count": len(new_items),
+        "removed_count": len(removed_items),
+        "total": len(current),
+        "new_genres": dict(new_genres.most_common(20)),
+        "new_items": [
+            {"name": i["name"], "type": i["type"], "year": i["year"], "genres": i["genres"]}
+            for i in new_items[:30]
+        ],
+        "removed_items": [
+            {"name": i["name"], "type": i["type"]} for i in removed_items[:20]
+        ],
+    }
+    DIFF_OUTPUT.write_text(json.dumps(diff_data, indent=2))
+
+    print(f"\n{'='*60}")
+    print(f"  Snapshot saved ({len(current)} items)")
+    if len(current) < len(previous):
+        print(f"  ⚠️  Library shrank by {len(previous) - len(current)} items — possible scan issue")
+    print(f"{'='*60}")
+
+
+if __name__ == "__main__":
+    run()
