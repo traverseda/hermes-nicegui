@@ -83,10 +83,12 @@
         "narHash": "sha256-sOHs6Y0w0cXOykU8IJl3X5rdU2OqchD5h5BatGtsbhk=",
         "rev": "693641aa8b4359c602283bdbbc14041e03bc47bc",
         "revCount": 32270,
+        "shallow": false,
         "type": "git",
         "url": "file:./vendor/hermes-agent"
       },
       "original": {
+        "shallow": false,
         "type": "git",
         "url": "file:./vendor/hermes-agent"
       }
