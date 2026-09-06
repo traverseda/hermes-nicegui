@@ -3,9 +3,9 @@
 ## Machine layout
 
 ```
-azrael (build machine)          hermes (LXC, ssh://root@192.168.193.158)
-~/Code/personal/                /var/lib/hermes-deploy
-hermes-deploy/                  (git repo, bare-ish — has working tree)
+azrael.lan (build machine)     hermes.lan (LXC, ssh://root@hermes.lan)
+~/Code/personal/               /var/lib/hermes-deploy
+hermes-deploy/                 (git repo, bare-ish — has working tree)
 ```
 
 ## Git remotes
@@ -15,7 +15,7 @@ Both boxes use the **same `box` remote** pointing to the hermes LXC's repo:
 ```ini
 # azrael & hermes
 [remote "box"]
-    url = ssh://root@192.168.193.158/var/lib/hermes-deploy
+    url = ssh://root@hermes.lan/var/lib/hermes-deploy
     fetch = +refs/heads/*:refs/remotes/box/*
 ```
 
@@ -28,17 +28,17 @@ Hermes also has a `github` remote for backup:
 ### SSH self-connection (hermes pulling from itself)
 
 The `box` remote SSH connection is problematic: hermes pushes to itself via
-`ssh root@192.168.193.158`, which requires root's SSH key to work.
+`ssh root@hermes.lan` (192.168.193.158), which requires root's SSH key to work.
 
-**Required setup on hermes:**
+**Required setup on hermes.lan:**
 - `/root/.ssh/id_ed25519` + `/root/.ssh/id_ed25519.pub` exist
 - `id_ed25519.pub` is in `/root/.ssh/authorized_keys`
-- `/root/.ssh/config` has `StrictHostKeyChecking no` for `127.0.0.1` and `192.168.193.158`
+- `/root/.ssh/config` has `StrictHostKeyChecking no` for `127.0.0.1` and `hermes.lan` / `192.168.193.158`
 - Git has `safe.directory` for `/var/lib/hermes-deploy` in both repo and root config
 
-### SSH from azrael to hermes
+### SSH from azrael.lan to hermes.lan
 
-Azrael connects using your SSH key. Her keys must be in hermes's `/root/.ssh/authorized_keys`.
+Azrael connects using your SSH key. Your keys must be in root's on hermes: `/root/.ssh/authorized_keys`.
 
 ## The deployment flow
 
@@ -48,7 +48,7 @@ Azrael connects using your SSH key. Her keys must be in hermes's `/root/.ssh/aut
 # In /home/traverseda/Code/personal/hermes-deploy on azrael
 git add -A
 git commit -m "your message"
-git push box main              # pushes to hermes's repo
+git push box main              # pushes to the LXC repo
 ```
 
 **That's it for the git step.** `git push box main` writes the commit to the
@@ -72,7 +72,7 @@ git push box main
 
 ```bash
 ssh root@hermes.lan
-# or: ssh root@192.168.193.158
+# or: ssh root@hermes.lan
 cd /var/lib/hermes-deploy
 git pull box main              # fetch+merge into working tree
 nixos-rebuild switch --flake .#hermes  # or: nixos-rebuild boot --flake .#hermes --rollback
@@ -106,8 +106,7 @@ The deploy flow is:
 - **Azrael**: `git commit` + `git push box main` → hermes has the code
 - **Hermes**: `git pull box main` + `nixos-rebuild switch --flake .#hermes`
 
-Nix fetches hermes-agent from the `vendor/hermes-agent` path inside hermes's
-repo checkout when building, so hermes's repo must have the correct submodule
+Nix fetches hermes-agent from the `vendor/hermes-agent` path inside the repo on the LXC when building, so the LXC repo must have the correct submodule checkouts.
 checkouts.
 
 ## Troubleshooting
@@ -121,8 +120,8 @@ git config --add safe.directory /var/lib/hermes-deploy/.git
 
 ### "Host key verification failed"
 ```bash
-ssh-keygen -R 192.168.193.158   # on azrael
-ssh-root@192.168.193.158         # accept the key
+ssh-keygen -R hermes.lan   # on azrael
+ssh root@hermes.lan         # accept the key
 ```
 
 ### hermes can't SSH to itself for pull
