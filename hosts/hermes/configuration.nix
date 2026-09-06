@@ -345,10 +345,13 @@
   # by the bot (`systemctl start hermes-vnc`) — never at boot.
   services.hermes-vnc.enable = true;
 
-  # Operator mandate t_89f84f69: pin model.default via hermesDeploy.model
-  # (modules/hermes-service.nix maps it into settings.model.default) so the
-  # activation deep-merge agrees with the operator-chosen live model.
-  hermesDeploy.model = "quanttrio/Qwen3.6-35b-a3b-awq";
+  # Operator mandate t_89f84f69: pin model via hermesDeploy.llm so all
+  # services (hermes, opencode, hindsight, nicegui, ha) use it.
+  hermesDeploy.llm = {
+    model = "quanttrio/Qwen3.6-35b-a3b-awq";
+    provider = "vllm";
+    baseUrl = "http://192.168.193.96:8000/v1";
+  };
 
   # ── Bot is root ──────────────────────────────────────────────────────
   # Hermes is a self-managing agent: give it root outright and let the
