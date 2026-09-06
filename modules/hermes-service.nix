@@ -85,7 +85,7 @@ in
         # One worker at a time: cap concurrent tasks per profile so a burst
         # of tickets doesn't spawn a pile of parallel agents on this box.
         # Dispatcher reads this at gateway startup (kanban_watchers.py).
-        kanban.max_in_progress_per_profile = 1;
+        kanban.max_in_progress_per_profile = 8;
         # Orchestrator toolset. `toolsets: [kanban]` is required for the
         # kanban tools' check_fn to pass in normal (non-worker) sessions —
         # the `all`/`*` wildcard deliberately does not enable kanban. The
