@@ -489,7 +489,7 @@ in
       fi
       # Git submodules (hermes-agent, hermes-nicegui) are NOT rsync-ed to the box —
       # they are tracked separately in the flake repo. Initialize them now so
-      # the hermes-agent binary can find its venv at vendor/hermes-agent/.venv.
+       # the hermes-agent binary can find its venv for its bundled Python deps.
       ${lib.getExe pkgs.git} -C ${cfg.repoDir} submodule update --init --recursive 2>/dev/null || true
       # Ledger hygiene: state/ (root-owned rollback bookkeeping) must NOT be
       # tracked, so a `git reset --hard` in sync_repo_to_gen never touches it.
