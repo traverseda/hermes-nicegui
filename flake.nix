@@ -120,7 +120,7 @@
         ./modules/hermes-ha.nix
         ./modules/hermes-dashboard.nix
         ./modules/opencode.nix
-        ./modules/llm.nix
+        ./modules/config.nix
         ./modules/hindsight.nix
         ./modules/exposure.nix
         ./modules/cloudflare-tunnel.nix

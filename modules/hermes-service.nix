@@ -21,11 +21,11 @@
 
 let
   cfg = config.services.hermes-agent;
-  llm = config.hermesDeploy.llm;
+  llm = config.hermesDeploy.providers.${config.hermesDeploy.defaultProvider};
 in
 {
 
-  config = {
+  config = lib.mkIf (config.hermesDeploy.defaultProvider != "") {
     services.hermes-agent = {
       enable = true;
 
@@ -39,6 +39,8 @@ in
       settings = {
         model.default = llm.model;
         model.provider = llm.provider;
+        model.base_url = llm.baseUrl;
+        model.api_key = "\${env:LLM_API_KEY}";
 
         # Agent clock: IANA timezone for hermes_time (session timestamps,
         # cron wall-clock anchoring). System TZ stays UTC; only the agent

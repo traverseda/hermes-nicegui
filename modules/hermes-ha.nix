@@ -193,9 +193,9 @@ in
     ];
 
     # Same declarative defaults as the main agent, reused from
-    # hermesDeploy.llm so one flag changes the model for all services.
+    # hermesDeploy.providers so one flag changes the model for all services.
     services.hermes-ha.settings = {
-      model.default = config.hermesDeploy.llm.model;
+      model.default = config.hermesDeploy.providers.${config.hermesDeploy.defaultProvider}.model;
       terminal.backend = "local";
       # The ha profile shares the default listener — never bind its own port.
       platforms.api_server.enabled = false;

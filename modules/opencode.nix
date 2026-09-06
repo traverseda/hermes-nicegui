@@ -10,7 +10,7 @@
 
 let
   cfg = config.services.opencode;
-  llm = config.hermesDeploy.llm;
+  llm = config.hermesDeploy.providers.${config.hermesDeploy.defaultProvider};
 
   # Opencode expects provider/model in the model field.
   opencodeModel = "${llm.provider}/${llm.model}";

@@ -44,7 +44,7 @@
 
 let
   cfg = config.services.hindsight;
-  llm = config.hermesDeploy.llm;
+  llm = config.hermesDeploy.providers.${config.hermesDeploy.defaultProvider};
 
   # Retain config applied to each bank in `codeBanks` via
   # PATCH /v1/default/banks/{bank_id}/config.
@@ -310,7 +310,7 @@ in
           HINDSIGHT_ENABLE_API = "true";
           HINDSIGHT_ENABLE_CP = lib.boolToString cfg.enableControlPlane;
           HINDSIGHT_CP_DATAPLANE_API_URL = "http://127.0.0.1:${toString cfg.apiPort}";
-          HINDSIGHT_API_LLM_PROVIDER = llm.provider;
+          HINDSIGHT_API_LLM_PROVIDER = config.hermesDeploy.hindsight.provider;
           HINDSIGHT_API_LLM_BASE_URL = llm.baseUrl;
           HINDSIGHT_API_LLM_MODEL = llm.model;
           HINDSIGHT_API_TEXT_SEARCH_EXTENSION = cfg.textSearchExtension;

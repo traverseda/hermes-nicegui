@@ -16,10 +16,19 @@ let
     (lib.nixosSystem {
       inherit system;
       modules = [
-        ../modules/llm.nix
+        ../modules/config.nix
         ../modules/hindsight.nix
         ../modules/exposure.nix
         {
+          hermesDeploy.providers.local = {
+            name    = "local";
+            provider= "vllm";
+            model   = "quanttrio/Qwen3.6-35b-a3b-awq";
+            baseUrl = "http://192.168.193.96:8000/v1";
+          };
+          hermesDeploy.defaultProvider = "local";
+          hermesDeploy.hindsight.provider = "openai";
+
           services.hindsight = {
             enable = true;
             autoStart = false; # don't pull the ~2GB image

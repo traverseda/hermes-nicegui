@@ -19,6 +19,7 @@
 {
   imports = [
     (modulesPath + "/virtualisation/proxmox-lxc.nix")
+    ../../modules/config.nix
     ../../modules/opencode.nix
   ];
 
@@ -93,7 +94,7 @@
 
   # ── Opencode handled by modules/opencode.nix ─────────────────────
   # The opencode module manages the binary and generates its global config
-  # from hermesDeploy.llm. The old activation script above is removed.
+  # from hermesDeploy.providers. The old activation script above is removed.
 
   # Content-store fast path: agent-authored skills/tools/MCP servers live in a
   # git-backed store (recovered by `hermes-tool revert`) instead of a Nix
@@ -105,17 +106,17 @@
 
   # ── Hindsight memory service ─────────────────────────────────────────
   # Standalone agent-memory API (retain/recall/reflect), tailnet-only.
-  # Model comes from `hermesDeploy.llm` (defaults to vllm /
+  # Model comes from `hermesDeploy.providers` (defaults to vllm /
   # quanttrio/Qwen3.6-35B-A3B-AWQ); secrets come from the agenix env file below.
   # Per-bank split: only the `code` bank (opencode) gets byte-exact verbatim
   # retain + engineering missions; the `hermes` bank (the agent's general
   # chat) stays on untouched defaults.
   services.hindsight = {
     enable = true;
-    environmentFile = config.age.secrets."hindsight-env".path;
+    environmentFile = config.age.secrets."config".path;
     codeBanks = [ "code" ];
     # Next.js control-plane web UI (:9999), tailnet-only behind the
-    # HINDSIGHT_CP_ACCESS_KEY login (key already present in hindsight-env).
+    # HINDSIGHT_CP_ACCESS_KEY login (key already present in config).
     # The exposure registry opens :9999 on tailscale0 automatically.
     enableControlPlane = true;
   };
@@ -123,79 +124,39 @@
   # ── Secrets (agenix) ─────────────────────────────────────────────────
   # Encrypted with your pubkey (see secrets/README.md). Decrypted to
   # /run/agenix/... at activation time — never in /nix/store.
-  age.secrets."hermes-env" = {
-    file = ../../secrets/hermes-env.age;
-    owner = "hermes";
-    group = "hermes";
-    mode = "0440";
+  #
+  # config.age: unified secret file containing ALL secrets merged into one
+  # env file. Editing: `agenix -e secrets/config.age`. Decryption on host
+  # reads the entire merged file and writes it to /run/agenix/config.
+  age.secrets."config" = {
+    file = ../../secrets/config.age;
+    owner = "root";
+    mode  = "0400";
   };
-  # Home Assistant credentials (HASS_URL, HASS_TOKEN). Appended to the
-  # default profile's .env (homeassistant platform) and, via the hermes-ha
-  # module's shared environmentFiles, to the ha profile's .env as well.
-  age.secrets."hass-env" = {
-    file = ../../secrets/hass-env.age;
-    owner = "hermes";
-    group = "hermes";
-    mode = "0440";
-  };
-  age.secrets."api-server-env" = {
-    file = ../../secrets/api-server-env.age;
-    owner = "hermes";
-    group = "hermes";
-    mode = "0440";
-  };
+  # Tailscale auth key: separate file because it's operator-provisioned
+  # (minted in Tailscale admin console, never derived from the merge).
   age.secrets."tailscale-auth" = {
     file = ../../secrets/tailscale-auth.age;
     owner = "root";
-    mode = "0400";
+    mode  = "0400";
   };
-  age.secrets."hindsight-env" = {
-    file = ../../secrets/hindsight-env.age;
-    owner = "root";
-    mode = "0440";
-  };
-  age.secrets."dashboard-env" = {
-    file = ../../secrets/dashboard-env.age;
-    owner = "hermes";
-    group = "hermes";
-    mode = "0440";
-  };
+  # Cloudflare tunnel token: separate file, operator-provisioned in
+  # Cloudflare Zero Trust dashboard.
   age.secrets."cloudflare-tunnel" = {
     file = ../../secrets/cloudflare-tunnel.age;
     owner = "root";
-    mode = "0400";
+    mode  = "0400";
   };
-  age.secrets."xaelwiki-env" = {
-    file = ../../secrets/xaelwiki-env.age;
-    owner = "xaelwiki";
-    group = "xaelwiki";
-    mode = "0440";
-  };
+  # Xaelwiki SSH deploy key: separate file, operator-managed on Codeberg.
   age.secrets."xaelwiki-ssh" = {
     file = ../../secrets/xaelwiki-ssh.age;
     owner = "xaelwiki";
     group = "xaelwiki";
-    mode = "0440";
-  };
-  age.secrets."hermes-nicegui-env" = {
-    file = ../../secrets/hermes-nicegui-env.age;
-    owner = "hermes";
-    group = "hermes";
-    mode = "0440";
-  };
-  # Bearer token the nicegui sessions/cron plugins send to the gateway
-  # api_server (:8443). MUST equal the gateway's API_SERVER_KEY
-  # (api-server-env). Without it every gateway call 401s.
-  age.secrets."hermes-nicegui-gateway-token" = {
-    file = ../../secrets/hermes-nicegui-gateway-token.age;
-    owner = "hermes";
-    group = "hermes";
-    mode = "0440";
+    mode  = "0440";
   };
 
   services.hermes-agent.environmentFiles = [
-    config.age.secrets."hermes-env".path
-    config.age.secrets."hass-env".path
+    config.age.secrets."config".path
   ];
 
   # ── Home Assistant API server ────────────────────────────────────────
@@ -207,7 +168,7 @@
   # profile's .env by the module.
   services.hermes-ha = {
     enable = true;
-    apiServerKeyFile = config.age.secrets."api-server-env".path;
+    apiServerKeyFile = config.age.secrets."config".path;
     # Carried over from the old box's ha profile (hermesagent.lan), adapted:
     # mcp_servers.fixups is deliberately NOT migrated — the ha profile's
     # escalation is now kanban (see modules/ticketing/ha-hermes.md), not the
@@ -276,7 +237,7 @@
   # .env — same pattern as the API_SERVER_KEY / hindsight keys.
   services.hermes-dashboard = {
     enable = true;
-    environmentFile = config.age.secrets."dashboard-env".path;
+    environmentFile = config.age.secrets."config".path;
   };
 
   # ── Cloudflare Tunnel ───────────────────────────────────────────────
@@ -299,7 +260,7 @@
   # bearer token comes from xaelwiki-env; the deploy key from xaelwiki-ssh.
   services.xaelwiki = {
     enable = true;
-    environmentFile = config.age.secrets."xaelwiki-env".path;
+    environmentFile = config.age.secrets."config".path;
     sshKeyFile = config.age.secrets."xaelwiki-ssh".path;
   };
 
@@ -315,8 +276,8 @@
   # dashboard-env secret only has the scrypt hash).
   services.hermes-nicegui = {
     enable = true;
-    environmentFile = config.age.secrets."hermes-nicegui-env".path;
-    gatewayTokenFile = config.age.secrets."hermes-nicegui-gateway-token".path;
+    environmentFile = config.age.secrets."config".path;
+    gatewayTokenFile = config.age.secrets."config".path;
     darkMode = true;
   };
 
@@ -325,13 +286,22 @@
   # by the bot (`systemctl start hermes-vnc`) — never at boot.
   services.hermes-vnc.enable = true;
 
-  # Operator mandate t_89f84f69: pin model via hermesDeploy.llm so all
+  # Operator mandate t_89f84f69: pin model via hermesDeploy.providers so all
   # services (hermes, opencode, hindsight, nicegui, ha) use it.
-  hermesDeploy.llm = {
-    model = "quanttrio/Qwen3.6-35b-a3b-awq";
-    provider = "vllm";
+  hermesDeploy.providers.local = {
+    name    = "local";
+    provider= "vllm";
+    model   = "quanttrio/Qwen3.6-35b-a3b-awq";
     baseUrl = "http://192.168.193.96:8000/v1";
   };
+  hermesDeploy.providers.openrouter = {
+    name    = "openrouter";
+    provider= "openrouter";
+    model   = "google/gemini-2.5-flash";
+  };
+  hermesDeploy.defaultProvider = "local";
+  hermesDeploy.fallbackProviders = [ "openrouter" ];
+  hermesDeploy.hindsight.port = 8888;
 
   # ── Bot is root ──────────────────────────────────────────────────────
   # Hermes is a self-managing agent: give it root outright and let the

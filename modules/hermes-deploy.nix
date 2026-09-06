@@ -479,9 +479,6 @@ in
     system.activationScripts.hermes-deploy-repo = lib.stringAfter [ "users" ] ''
       mkdir -p ${cfg.repoDir}
       chown ${config.services.hermes-agent.user}:${config.services.hermes-agent.group} ${cfg.repoDir}
-      find ${cfg.repoDir} -mindepth 1 \
-        -path ${cfg.repoDir}/state -prune -o \
-        -exec chown ${config.services.hermes-agent.user}:${config.services.hermes-agent.group} {} \;
       if [ ! -d ${cfg.repoDir}/.git ]; then
         echo "hermes-deploy: initialising git repo in ${cfg.repoDir}"
         ${lib.getExe pkgs.git} -C ${cfg.repoDir} init -q

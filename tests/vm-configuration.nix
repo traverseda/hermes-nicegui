@@ -12,13 +12,20 @@
 
 {
   imports = [
+    ./../modules/config.nix
     ./../modules/hermes-service.nix
     ./../modules/hermes-skills.nix
     ./../modules/hermes-deploy.nix
   ];
 
   # Test model: point at a fake provider; no real keys needed.
-  hermesDeploy.model = "openrouter/mock-test";
+  hermesDeploy.providers.mock = {
+    name    = "mock";
+    provider= "openrouter";
+    model   = "openrouter/mock-test";
+    baseUrl = "https://openrouter.ai/api/v1";
+  };
+  hermesDeploy.defaultProvider = "mock";
 
   services.hermes-deploy.enable = true;
 

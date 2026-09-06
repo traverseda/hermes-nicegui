@@ -20,7 +20,15 @@ let
         ../modules/hermes-service.nix
         ../modules/hermes-dashboard.nix
         ../modules/exposure.nix
+        ../modules/config.nix
         {
+          hermesDeploy.providers.test = {
+            name    = "test";
+            provider= "vllm";
+            model   = "test-model";
+          };
+          hermesDeploy.defaultProvider = "test";
+
           services.hermes-dashboard = {
             enable = true;
             environmentFile = "/dummy/dashboard-env";

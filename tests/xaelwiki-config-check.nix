@@ -30,11 +30,19 @@ let
       specialArgs = { inherit xaelwiki-src; };
       modules = [
         hermes-agent.nixosModules.default
+        ../modules/config.nix
         ../modules/exposure.nix
         ../modules/hermes-deploy.nix
         ../modules/hermes-service.nix
         ../modules/xaelwiki.nix
         {
+          hermesDeploy.providers.test = {
+            name    = "test";
+            provider= "vllm";
+            model   = "test-model";
+          };
+          hermesDeploy.defaultProvider = "test";
+
           services.hermes-agent.enable = true;
           services.hermes-deploy.enable = true;
           services.xaelwiki = {

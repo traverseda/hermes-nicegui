@@ -39,11 +39,19 @@ let
           ];
         }
         hermes-agent.nixosModules.default
+        ../modules/config.nix
         ../modules/hermes-service.nix
         ../modules/hermes-deploy.nix
         ../modules/hermes-nicegui.nix
         ../modules/exposure.nix
         {
+          hermesDeploy.providers.local = {
+            name    = "local";
+            provider= "vllm";
+            model   = "test-model";
+          };
+          hermesDeploy.defaultProvider = "local";
+
           services.hermes-nicegui = {
             enable = true;
             environmentFile = "/dummy/nicegui-env";
