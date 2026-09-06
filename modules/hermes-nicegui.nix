@@ -94,9 +94,12 @@ let
     [hermes_nicegui.plugins]
     sessions = hermes_nicegui.plugins.sessions:SessionsPlugin
     cron = hermes_nicegui.plugins.cron:CronPlugin
+    costs = hermes_nicegui.plugins.costs:CostsPlugin
     terminal = hermes_nicegui.plugins.terminal:TerminalPlugin
     kanban = hermes_nicegui.plugins.kanban:KanbanPlugin
     files = hermes_nicegui.plugins.files:FilesPlugin
+    vnc = hermes_nicegui.plugins.vnc:VncPlugin
+    xaelwiki = hermes_nicegui.plugins.xaelwiki:XaelWikiPlugin
     EOF
   '';
 
