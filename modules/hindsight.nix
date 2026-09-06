@@ -182,11 +182,10 @@ in
 
     codeBankSetupTimeout = lib.mkOption {
       type = lib.types.int;
-      default = 600;
+      default = 30;
       description = ''
         Seconds the bank-config oneshot waits for the API `/health` before
-        giving up. The container health-start-period is 180s, so keep this
-        comfortably above it.
+        giving up.
       '';
     };
 
@@ -390,13 +389,14 @@ in
 
     # Apply code-optimised retain config to exactly the banks in `codeBanks`,
     # once the API is healthy. Global settings stay neutral so non-code banks
-    # are unaffected. Idempotent; re-run with `systemctl start
-    # hindsight-code-bank-config` after adding banks.
+    # are unaffected. NOT a wantedBy unit — should only be run manually
+    # (systemctl start hindsight-code-bank-config) for initial bank setup or
+    # after banks are modified. Must NOT block NixOS activation.
     systemd.services.hindsight-code-bank-config = lib.mkIf (cfg.codeBanks != [ ]) {
       description = "Apply code-optimised retain config to Hindsight code banks";
       wants = [ "podman-hindsight.service" ];
       after = [ "podman-hindsight.service" ];
-      wantedBy = [ "multi-user.target" ];
+      wantedBy = [ ];
       path = with pkgs; [
         curl
         coreutils
@@ -411,31 +411,47 @@ in
       };
       script = "${pkgs.writeShellScript "hindsight-code-bank-config" ''
         set -eu
-        # Clear error instead of "unbound variable" if the agenix env file was
-        # not yet decrypted when this unit fired (first-boot provisioning race).
-        : "''${HINDSIGHT_API_TENANT_API_KEY:?hindsight env missing HINDSIGHT_API_TENANT_API_KEY — is /run/agenix/hindsight-env present?}"
+        : "''${HINDSIGHT_API_TENANT_API_KEY:?hindsight env missing HINDSIGHT_API_TENANT_API_KEY}"
         api="http://127.0.0.1:${toString cfg.apiPort}"
         key="$HINDSIGHT_API_TENANT_API_KEY"
         banks="${lib.concatStringsSep " " cfg.codeBanks}"
         timeout="${toString cfg.codeBankSetupTimeout}"
 
+        # Health check: distinguish "connection refused" (container starting,
+        # keep retrying) from "HTTP error" (API running but broken, fail now).
         deadline=$(($(date +%s) + timeout))
-        until curl -fsS "$api/health" >/dev/null 2>&1; do
+        while true; do
+          http_code=$(curl -sk -o /dev/null -w "%{http_code}" "$api/health" 2>/dev/null || echo "000")
+          if [ "$http_code" = "200" ]; then
+            break
+          elif [ "$http_code" != "000" ]; then
+            echo "hindsight API returned HTTP $http_code on /health — failing immediately (not retrying)" >&2
+            exit 1
+          fi
           [ "$(date +%s)" -ge "$deadline" ] && {
-            echo "hindsight API not healthy after ${toString cfg.codeBankSetupTimeout}s" >&2
+            echo "hindsight API not healthy after $timeout s" >&2
             exit 1
           }
-          sleep 5
+          sleep 3
         done
 
         for bank in $banks; do
           # Ensure the bank exists (no-op if a client already created it).
-          curl -fsS -X PUT "$api/v1/default/banks/$bank" \
-            -H "Authorization: Bearer $key" >/dev/null 2>&1 || true
-          curl -fsS -X PATCH "$api/v1/default/banks/$bank/config" \
+          http_code=$(curl -sk -o /dev/null -w "%{http_code}" \
+            -X PUT "$api/v1/default/banks/$bank" \
+            -H "Authorization: Bearer $key" 2>/dev/null || echo "000")
+          if [ "$http_code" != "200" ] && [ "$http_code" != "409" ]; then
+            echo "hindsight failed to create bank '$bank': HTTP $http_code" >&2
+          fi
+          http_code=$(curl -s -o /dev/stderr -w "%{http_code}" \
+            -X PATCH "$api/v1/default/banks/$bank/config" \
             -H "Authorization: Bearer $key" \
             -H "Content-Type: application/json" \
-            -d @${codeBankConfigFile} >/dev/null
+            -d @${codeBankConfigFile} 2>/dev/null || echo "000")
+          if [ "$http_code" != "200" ]; then
+            echo "hindsight failed to config bank '$bank': HTTP $http_code" >&2
+            exit 1
+          fi
           echo "hindsight: configured $bank as a code bank"
         done
       ''}";

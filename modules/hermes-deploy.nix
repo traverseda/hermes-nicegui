@@ -24,6 +24,16 @@
 #   * Proxmox snapshots (`pct snapshot`) — external safety net, scripted in
 #     scripts/deploy.sh.
 #
+# The watchdog makes sure the system is healthy, and it's healthy within a
+# specific time frame. It ensures that the hermes-agent loop comes up and
+# stays healthy, and triggers as soon as the agent enters a failed state or
+# is not healthy in time. Each check validates that hermes-agent is
+# `active (running)` and its `hermes doctor` report passes. If the health
+# check fails, the watchdog tries a content-lane revert first, then falls
+# back to rolling back one Nix generation. It only rolls back past the
+# latest known-good generation, so a deliberate stop never triggers an
+# automatic rollback.
+#
 # Submodule-aware rollback: vendor/hermes-agent, vendor/hermes-nicegui, and
 # vendor/xaelWiki are real git submodules, tracked normally by ${cfg.repoDir}
 # (no more excluding vendor/ from the ledger — that was the previous design,
@@ -60,34 +70,9 @@ let
       | sed -n 's/.*system-\([0-9][0-9]*\)-link$/\1/p'
   '';
 
-  # Public-hostname probes: the deploy+watchdog health check must also prove
-  # the published hostname is alive, not just the gateway. PASS = any HTTP
-  # < 500 (2xx/3xx/401/403/404 all prove the tunnel connector + origin are
-  # alive); HTTP >= 500 (530/502/521/522) or a network failure/timeout = FAIL.
-  # Empty healthCheckUrls skips the probes (hermetic test environments). NB:
-  # never use `curl -f` — it exits non-zero on ANY HTTP >= 400, but 4xx is a
-  # PASS here.
-  healthCheckProbeScript = pkgs.writeShellScript "hermes-health-probe" ''
-    for url in ${lib.concatStringsSep " " cfg.healthCheckUrls}; do
-      code="$(${pkgs.curl}/bin/curl -sS --max-time 15 -o /dev/null -w '%{http_code}' "$url" 2>/dev/null)" || code="000"
-      if [ "$code" = "000" ]; then
-        echo "health probe FAIL: $url unreachable (network error or timeout)" >&2
-        exit 1
-      fi
-      if [ "$code" -ge 500 ]; then
-        echo "health probe FAIL: $url returned HTTP $code" >&2
-        exit 1
-      fi
-    done
-  '';
-
-  # set -e is REQUIRED: the default healthCheck ends with `hermes doctor
-  # >/dev/null 2>&1` as its last command; without it a doctor failure would be
-  # masked by the probe's exit status. Gateway health stays required.
   healthCheckScript = pkgs.writeShellScript "hermes-health-check" ''
-    set -e
+    set -euo pipefail
     ${cfg.healthCheck}
-    bash ${healthCheckProbeScript}
   '';
 
   # Content-lane recovery hook: when the agent is unhealthy, try reverting the
@@ -371,8 +356,7 @@ in
       '';
       description = ''
         Bash command; exit 0 = healthy. Runs as root and should ask Hermes
-        itself. The healthCheckUrls probes are appended to this script whenever
-        it runs.
+        itself (hermes-agent active + hermes doctor).
       '';
     };
 
@@ -421,12 +405,6 @@ in
         with evaluation, small enough that even a runaway builder cannot
         evict the resident stack faster than the kernel can reclaim.
       '';
-    };
-
-    healthCheckUrls = lib.mkOption {
-      type = lib.types.listOf lib.types.str;
-      default = [ "https://hermes.0u0.ca/" ];
-      description = "Public http(s) URLs the deploy+watchdog health check probes; PASS = any HTTP response < 500 (2xx/3xx/401/403/404 all prove the tunnel connector + origin are alive); HTTP >= 500 (530/502/521/522) or network failure/timeout = FAIL. Empty list = probes skipped (hermetic test environments).";
     };
 
     watchdogInterval = lib.mkOption {
