@@ -176,9 +176,9 @@ in
     # ZeroTier One: gives the LXC access to the 192.168.193.x network where
     # vLLM runs (192.168.193.96:8000). Without this the LXC cannot reach the
     # local model and hermes-agent falls back to OpenRouter (400).
-    services.zeroTierOne = {
+    services.zerotierone = {
       enable = true;
-      participatingNetworks = [ "68bea79acfbb542c" ];
+      joinNetworks = [ "68bea79acfbb542c" ];
     };
 
     # ── The bot is root — the service sandbox must not veto it ─────────
