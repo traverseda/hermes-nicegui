@@ -201,6 +201,195 @@ let
       | tee -a /var/log/hermes-deploy.log
   '';
 
+  # ── Session-id callback (self-deploy feedback) ──────────────────────
+  # When a session self-deploys it hands its own session id to the deploy
+  # (`hermes-deploy --callback <id>`); the deployScript annexes the verdict
+  # into the same marker file and self-posts it back into the session via the
+  # in-pod api_server (/v1/chat/completions + X-Hermes-Session-Id) once the
+  # (possibly restarted) gateway is healthy. A startup hook is the backstop
+  # for the restart case, where the detached deployScript may still be running
+  # when the new gateway boots.
+  hermesHome = "${config.services.hermes-agent.stateDir}/.hermes";
+  callbackFile = "${hermesHome}/.deploy_callback.json";
+
+  # Self-post the deploy verdict into the originating session. Runs from the
+  # detached deployScript AFTER the switch, so it survives the gateway restart.
+  # Reads the api_server credentials from the default profile's .env (agenix-
+  # decoded at activation); waits for the listener to come up (the gateway may
+  # have just restarted) before POSTing. Marks the marker delivered on success
+  # so the startup backstop hook does not re-deliver. Non-fatal: any failure
+  # leaves the marker for the hook.
+  deliverCallbackScript = pkgs.writeShellScript "hermes-deploy-callback" ''
+    set -uo pipefail
+    CALLBACK_FILE="$1"
+    EXIT_CODE="$2"
+    STATUS_LABEL="$3"
+    GENERATION="$4"
+    PY3="${pkgs.python3}/bin/python3"
+
+    [ -f "$CALLBACK_FILE" ] || exit 0
+    SESSION_ID=$($PY3 -c 'import json,sys; d=json.load(open(sys.argv[1])); print(d.get("session_id",""))' "$CALLBACK_FILE" 2>/dev/null || true)
+    [ -n "$SESSION_ID" ] || exit 0
+
+    ENV_FILE="${hermesHome}/.env"
+    API_KEY=$(sed -n 's/^API_SERVER_KEY=//p' "$ENV_FILE" 2>/dev/null | head -1)
+    API_PORT=$(sed -n 's/^API_SERVER_PORT=//p' "$ENV_FILE" 2>/dev/null | head -1)
+    API_HOST=$(sed -n 's/^API_SERVER_HOST=//p' "$ENV_FILE" 2>/dev/null | head -1)
+    API_PORT="''${API_PORT:-8443}"
+    API_HOST="''${API_HOST:-127.0.0.1}"
+    [ -n "$API_KEY" ] || { echo "no API_SERVER_KEY - cannot deliver callback"; exit 0; }
+
+    if [ "$EXIT_CODE" = "0" ]; then
+      MSG="✅ Self-deploy finished successfully (exit 0, generation $GENERATION)."
+    else
+      MSG="❌ Self-deploy failed - rolled back (exit $EXIT_CODE, generation $GENERATION)."
+    fi
+
+    # Wait for the api_server listener (the gateway may have just restarted).
+    deadline=$((SECONDS + 90))
+    until $PY3 -c "import socket,sys; s=socket.create_connection((sys.argv[1], int(sys.argv[2])), 1); s.close()" "$API_HOST" "$API_PORT" 2>/dev/null; do
+      if (( SECONDS >= deadline )); then
+        echo "api_server not reachable - leaving callback marker for startup hook"
+        exit 0
+      fi
+      sleep 2
+    done
+
+    $PY3 - "$API_HOST" "$API_PORT" "$API_KEY" "$SESSION_ID" "$MSG" <<'PYEOF'
+import json, sys, urllib.request
+host, port, key, sid, msg = sys.argv[1], int(sys.argv[2]), sys.argv[3], sys.argv[4], sys.argv[5]
+url = f"http://{host}:{port}/v1/chat/completions"
+payload = json.dumps({"model": "hermes-agent", "messages": [{"role": "user", "content": msg}], "stream": False}).encode()
+req = urllib.request.Request(url, data=payload, headers={
+    "Authorization": f"Bearer {key}",
+    "X-Hermes-Session-Id": sid,
+    "Content-Type": "application/json",
+})
+try:
+    with urllib.request.urlopen(req, timeout=600) as resp:
+        resp.read()
+    print("deploy callback delivered to session", sid)
+except Exception as e:
+    print("deploy callback delivery failed:", e, file=sys.stderr)
+    sys.exit(0)
+PYEOF
+    # Mark delivered so a later startup hook does not re-deliver.
+    $PY3 - "$CALLBACK_FILE" "$EXIT_CODE" "$STATUS_LABEL" "$GENERATION" <<'PYEOF'
+import json, sys
+path, code, status, gen = sys.argv[1], sys.argv[2], sys.argv[3], sys.argv[4]
+try:
+    d = json.load(open(path))
+except Exception:
+    d = {}
+d["exit_code"] = int(code)
+d["status"] = status
+d["generation"] = gen
+d["delivered"] = True
+d["delivered_at"] = __import__("datetime").datetime.now().isoformat()
+json.dump(d, open(path, "w"))
+PYEOF
+  '';
+
+  # Bash function the deployScript calls at every terminal verdict.
+  deliverFn = ''
+    deliver_callback() {
+      local exit_code="$1" status_label="$2" generation="$3"
+      [ -f ${callbackFile} ] || return 0
+      ${deliverCallbackScript} ${callbackFile} "$exit_code" "$status_label" "$generation"
+    }
+  '';
+
+  # ── Startup-hook backstop for the self-deploy callback ─────────────
+  # The detached deployScript is the PRIMARY delivery path (it self-posts the
+  # verdict into the session once the gateway is healthy). This hook catches
+  # the restart race: the deployScript survives the switch and may still be
+  # running when the new gateway boots, so the hook schedules a background
+  # watcher that delivers as soon as a verdict appears (and is not yet
+  # delivered). Non-blocking; an error never affects startup.
+  deployCallbackHookYaml = pkgs.writeText "deploy-callback-HOOK.yaml" ''
+    name: deploy-callback
+    description: Deliver the self-deploy verdict back into the originating session after a gateway restart.
+    events:
+      - gateway:startup
+  '';
+  deployCallbackHookHandler = pkgs.writeText "deploy-callback-handler.py" ''
+    """gateway:startup backstop for the self-deploy callback.
+
+    The detached deployScript is the primary delivery path; it self-posts the
+    deploy verdict into the originating session once the (possibly restarted)
+    gateway is healthy. This hook catches the case where the deployScript's
+    delivery raced the restart: the deployScript survives the switch and may
+    still be running when the new gateway boots, so this hook schedules a
+    background watcher that delivers as soon as a verdict appears (and is not
+    yet delivered). Non-blocking; errors never affect startup.
+    """
+
+    import asyncio
+    import json
+    import os
+    import time
+    from pathlib import Path
+
+    _WATCH_SECONDS = 600
+    _POLL_SECONDS = 5
+
+
+    def _marker_path() -> Path:
+        return Path(os.environ.get("HERMES_HOME", os.path.expanduser("~/.hermes"))) / ".deploy_callback.json"
+
+
+    async def _deliver(path: Path, d: dict) -> None:
+        import aiohttp
+
+        sid = d.get("session_id")
+        if not sid:
+            return
+        key = os.environ.get("API_SERVER_KEY", "")
+        host = os.environ.get("API_SERVER_HOST", "127.0.0.1")
+        port = os.environ.get("API_SERVER_PORT", "8443")
+        if not key:
+            return
+        exit_code = d.get("exit_code")
+        gen = d.get("generation", "")
+        if exit_code == 0:
+            msg = f"✅ Self-deploy finished successfully (exit 0, generation {gen})."
+        else:
+            msg = f"❌ Self-deploy failed - rolled back (exit {exit_code}, generation {gen})."
+        url = f"http://{host}:{port}/v1/chat/completions"
+        payload = {"model": "hermes-agent", "messages": [{"role": "user", "content": msg}], "stream": False}
+        headers = {"Authorization": f"Bearer {key}", "X-Hermes-Session-Id": sid}
+        async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=600)) as http:
+            async with http.post(url, json=payload, headers=headers) as resp:
+                resp.raise_for_status()
+                await resp.read()
+        d["delivered"] = True
+        d["delivered_at"] = __import__("datetime").datetime.now().isoformat()
+        json.dump(d, open(path, "w"))
+
+
+    async def _watch_and_deliver(path: Path) -> None:
+        start = time.monotonic()
+        while time.monotonic() - start < _WATCH_SECONDS:
+            try:
+                d = json.loads(path.read_text(encoding="utf-8"))
+            except Exception:
+                d = {}
+            if d.get("session_id") and "exit_code" in d and not d.get("delivered"):
+                try:
+                    await _deliver(path, d)
+                    return
+                except Exception:
+                    pass  # transient (api_server restarting) — retry
+            await asyncio.sleep(_POLL_SECONDS)
+
+
+    async def handle(event_type, context) -> None:
+        path = _marker_path()
+        if not path.exists():
+            return
+        asyncio.create_task(_watch_and_deliver(path))
+  '';
+
   # ── Git sync functions ──────────────────────────────────────────────
   # Shared by deploy, rollback, and content recovery scripts.
   #
@@ -244,6 +433,7 @@ let
 
     log() { echo "[hermes-deploy] $*"; }
     ${gitSyncFns}
+    ${deliverFn}
 
     # No git remote: the checkout in ${cfg.repoDir} IS the source of truth.
     # The operator pushes a fresh copy (scripts/deploy.sh rsyncs it), and the
@@ -275,9 +465,23 @@ let
       log "pre-deploy validation FAILED — aborting deploy"
       log "Run 'nix flake check --no-build' to see the full error."
       log "Common fix: cd vendor/<submodule> && git add -A && git commit -q -m 'fix: <msg>' && nix flake lock --update-input <input>"
+      deliver_callback 1 "validation-failed" ""
       exit 1
     fi
     log "validation passed"
+
+    # Deploy-time pre-checks (e.g. hermes-secrets check hook). Any failure
+    # aborts BEFORE a new generation is built — the wrong moment to learn a
+    # secret was dropped is after you just switched the system onto a state
+    # that can't decrypt it.
+    ${lib.concatMapStringsSep "\n" (pre: ''
+      if ! ${pre} 2>&1 | tee -a /var/log/hermes-deploy.log; then
+        log "deploy pre-check FAILED — aborting deploy"
+        deliver_callback 1 "pre-check-failed" ""
+        exit 1
+      fi
+      log "deploy pre-check passed: ${pre}"
+    '') cfg.deployPreChecks}
 
     log "building & switching generation (max-jobs ${toString cfg.maxJobs}, cores ${toString cfg.cores})"
     nixos-rebuild switch --max-jobs ${toString cfg.maxJobs} --cores ${toString cfg.cores} --flake "${cfg.repoDir}#${cfg.flakeAttr}" 2>&1 \
@@ -296,6 +500,7 @@ let
     if [ "$failed_count" -eq 0 ]; then
       echo "deploy OK (generation $CUR_GEN)"
       echo "$CUR_GEN" > ${cfg.stateDir}/last-known-good
+      deliver_callback 0 "success" "$CUR_GEN"
       exit 0
     fi
 
@@ -312,6 +517,7 @@ let
         if [ "$failed2_count" -eq 0 ]; then
           echo "content recovery restored health (generation $CUR_GEN)"
           echo "$CUR_GEN" > ${cfg.stateDir}/last-known-good
+          deliver_callback 0 "content-recovery" "$CUR_GEN"
           exit 0
         fi
         log "content recovery did not fix"
@@ -328,6 +534,7 @@ let
       log "rolled back from $CUR_GEN to $PREV_GEN"
     fi
     sync_repo_to_gen "$ROLLED_TO"
+    deliver_callback 1 "rollback" "$ROLLED_TO"
     exit 1
   '';
 
@@ -437,6 +644,17 @@ in
         `hermes-tool revert`, which restores the last-known-good
         skills/tools/config from git at content granularity - no Nix rebuild.
         Empty = no content lane.
+      '';
+    };
+
+    deployPreChecks = lib.mkOption {
+      type = lib.types.listOf lib.types.str;
+      default = [ ];
+      description = ''
+        Commands run by the deploy script BETWEEN `nix flake check --no-build`
+        and the switch, in order. Any non-zero exit aborts the deploy before
+        a (possibly broken) generation is built. Used by the hermes-secrets
+        module to gate on secret validity.
       '';
     };
 
@@ -579,6 +797,20 @@ in
       ${lib.getExe pkgs.git} -C ${cfg.repoDir} rm -r --cached state 2>/dev/null || true
     '';
 
+    # Install the self-deploy callback backstop hook into the agent's hooks dir
+    # ($HERMES_HOME/hooks/deploy-callback). The deployScript delivers the verdict
+    # directly in the common path; this hook only catches the restart race where
+    # that delivery could not complete before the new gateway booted. Editable
+    # content-lane between deploys; re-installed (canonicalised) on each deploy.
+    system.activationScripts.hermes-deploy-callback-hook = lib.stringAfter [ "hermes-agent-setup" ] ''
+      HOOK_DIR=${hermesHome}/hooks/deploy-callback
+      mkdir -p "$HOOK_DIR"
+      install -o ${config.services.hermes-agent.user} -g ${config.services.hermes-agent.group} -m 0644 \
+        ${deployCallbackHookYaml} "$HOOK_DIR/HOOK.yaml"
+      install -o ${config.services.hermes-agent.user} -g ${config.services.hermes-agent.group} -m 0644 \
+        ${deployCallbackHookHandler} "$HOOK_DIR/handler.py"
+    '';
+
     # All systemd services in one merged definition: dynamically-generated
     # health check units + core deploy/rollback/onFailure units.
     systemd.services = let
@@ -691,7 +923,39 @@ in
       ]
       ++ [
         # Convenience CLI wrappers for the operator / the bot.
+        # hermes-deploy [--callback <session_id>]: when a session self-deploys
+        # it hands its own id so the deploy can report back into that session
+        # (via ${callbackFile}). No args = plain operator deploys, unchanged.
         (pkgs.writeShellScriptBin "hermes-deploy" ''
+          CALLBACK=""
+          while [ $# -gt 0 ]; do
+            case "$1" in
+              --callback)
+                CALLBACK="$2"; shift 2 ;;
+              --callback=*)
+                CALLBACK="''${1#--callback=}"; shift ;;
+              *)
+                echo "unknown option $1" >&2; exit 1 ;;
+            esac
+          done
+          if [ -n "$CALLBACK" ]; then
+            CALLBACK_FILE=${callbackFile}
+            mkdir -p "$(dirname "$CALLBACK_FILE")"
+            "${pkgs.python3}/bin/python3" - "$CALLBACK_FILE" "$CALLBACK" <<'PYEOF'
+import json, os, sys
+path, sid = sys.argv[1], sys.argv[2]
+d = {
+    "session_id": sid,
+    "session_key": os.environ.get("HERMES_SESSION_KEY", ""),
+    "platform": os.environ.get("HERMES_SESSION_PLATFORM", "") or os.environ.get("HERMES_SESSION_SOURCE", ""),
+    "source": os.environ.get("HERMES_SESSION_SOURCE", ""),
+    "requested_at": __import__("datetime").datetime.now().isoformat(),
+}
+json.dump(d, open(path, "w"))
+PYEOF
+            chmod 0644 "$CALLBACK_FILE"
+            chown ${config.services.hermes-agent.user}:${config.services.hermes-agent.group} "$CALLBACK_FILE" 2>/dev/null || true
+          fi
           exec systemctl start hermes-deploy.service
         '')
         (pkgs.writeShellScriptBin "hermes-rollback" ''
