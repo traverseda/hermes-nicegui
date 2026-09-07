@@ -59,9 +59,12 @@ let
   agentCfg = config.services.hermes-agent;
   cfg = config.services.hermes-tools;
 
-  contentDir = cfg.contentDir;
-  hermesHome = "${agentCfg.stateDir}/.hermes";
-  goodTag = "content-good";
+  contentDir         = cfg.contentDir;
+  hermesHome         = "${agentCfg.stateDir}/.hermes";
+  goodTag            = "content-good";
+  # Defaults for vendor-deploy; override via hermes-deploy config.
+  repoDir            = config.services.hermes-deploy.repoDir    or "/var/lib/hermes-deploy";
+  flakeAttr          = config.services.hermes-deploy.flakeAttr  or "hermes";
 
   # hermes-tool: a store binary built from scripts/hermes-tool.sh with the
   # concrete paths substituted in. This is the recovery floor — it must exist
@@ -74,6 +77,17 @@ let
     mkdir -p $out/bin
     install -m 0755 ${hermesTool} $out/bin/hermes-tool
   '';
+
+  # vendor-deploy: convenience script that wraps the vendor commit + flake lock
+  # sequence into a single command so the bot never forgets the nix flake lock
+  # step. Installed alongside hermes-tool on PATH.
+  # Uses replaceVars for repoDir/flakeAttr substitution, same pattern as
+  # hermes-tool.
+  vendorDeployPackage = pkgs.writeShellScriptBin "vendor-deploy" (
+    pkgs.replaceVars ./../scripts/vendor-deploy {
+      inherit repoDir flakeAttr;
+    }
+  );
 
   # Activation scripts run with a PATH that has NO git (only coreutils,
   # gnused, ...), so any git call there must use an absolute store path. The
@@ -140,9 +154,9 @@ in
           chown -h ${agentCfg.user}:${agentCfg.group} ${hermesHome}/skills
         '';
 
-    # ── hermes-tool on PATH for the agent (gateway service) and operator ──
-    services.hermes-agent.extraPackages = [ hermesToolPackage ];
-    environment.systemPackages = [ hermesToolPackage ];
+    # ── hermes-tool + vendor-deploy on PATH for the agent (gateway service) and operator ──
+    services.hermes-agent.extraPackages = [ hermesToolPackage vendorDeployPackage ];
+    environment.systemPackages = [ hermesToolPackage vendorDeployPackage ];
 
     # ── Content lane recovery hook for hermes-deploy ──────────────────
     # When the deploy watchdog sees an unhealthy agent, try running
