@@ -19,8 +19,8 @@
 {
   imports = [
     (modulesPath + "/virtualisation/proxmox-lxc.nix")
-    ../../modules/config.nix
-    ../../modules/opencode.nix
+    ../config.nix
+    ../opencode.nix
   ];
 
   proxmoxLXC = {
@@ -84,6 +84,16 @@
     repoDir = "/var/lib/hermes-deploy";
     flakeAttr = "hermes";
     branch = "main";
+    # LLM provider info for the health check — if set, the health check
+    # actually sends a chat completion request to the model endpoint and
+    # verifies a response arrives. "can you hear me" test.
+    llmModel = "QuantTrio/Qwen3.6-35B-A3B-AWQ";
+    llmBaseUrl = "http://192.168.193.96:8000/v1";
+    # Probe the actual public hostname, not just the local gateway process —
+    # a generation once shipped with no cloudflared unit and the tunnel
+    # 530'd for ~20min while the gateway itself stayed healthy the whole
+    # time. See modules/cloudflare-tunnel.nix / hermes-nicegui.nix for the
+    # same hostname.
   };
 
   # ── Opencode handled by modules/opencode.nix ─────────────────────
@@ -107,7 +117,7 @@
   # chat) stays on untouched defaults.
   services.hindsight = {
     enable = true;
-    environmentFile = "/run/agenix/hindsight.env";
+    environmentFile = config.age.secrets."config".path;
     codeBanks = [ "code" ];
     # Next.js control-plane web UI (:9999), tailnet-only behind the
     # HINDSIGHT_CP_ACCESS_KEY login (key already present in config).
@@ -115,49 +125,54 @@
     enableControlPlane = true;
   };
 
-  # ── Secrets (agenix, one file per secret) ─────────────────────────────
-  # Encrypted with two recipients (operator + LXC host key, see
-  # secrets/README.md). Each secret is its own secrets/<NAME>.age file,
-  # declared by modules/hermes-secrets.nix from secrets/manifest and
-  # decrypted to /run/agenix/<NAME> at activation (never /nix/store).
-  # That module also assembles per-consumer aggregate env files
-  # (/run/agenix/hermes.env, /run/agenix/hindsight.env, …) AFTER agenix has
-  # decrypted and BEFORE the hermes-agent .env build, so every consumer
-  # below just points at its aggregate.
-  services.hermes-secrets.enable = true;
-
-  # Tailscale auth key: separate, operator-provisioned (minted in Tailscale
-  # admin console). Consumed directly as authKeyFile, not via an env file.
-  age.secrets."tailscale-auth" = {
-    file = ../../secrets/tailscale-auth.age;
+  # ── Secrets (agenix) ─────────────────────────────────────────────────
+  # Encrypted with your pubkey (see secrets/README.md). Decrypted to
+  # /run/agenix/... at activation time — never in /nix/store.
+  #
+  # config.age: unified secret file containing ALL secrets merged into one
+  # env file. Editing: `agenix -e secrets/config.age`. Decryption on host
+  # reads the entire merged file and writes it to /run/agenix/config.
+  age.secrets."config" = {
+    file = ../config.age;
     owner = "root";
-    mode = "0400";
+    mode  = "0400";
+  };
+  # Tailscale auth key: separate file because it's operator-provisioned
+  # (minted in Tailscale admin console, never derived from the merge).
+  age.secrets."tailscale-auth" = {
+    file = ../tailscale-auth.age;
+    owner = "root";
+    mode  = "0400";
   };
   # Cloudflare tunnel token: separate file, operator-provisioned in
   # Cloudflare Zero Trust dashboard.
   age.secrets."cloudflare-tunnel" = {
-    file = ../../secrets/cloudflare-tunnel.age;
+    file = ../cloudflare-tunnel.age;
     owner = "root";
-    mode = "0400";
+    mode  = "0400";
   };
   # Xaelwiki SSH deploy key: separate file, operator-managed on Codeberg.
   age.secrets."xaelwiki-ssh" = {
-    file = ../../secrets/xaelwiki-ssh.age;
+    file = ../xaelwiki-ssh.age;
     owner = "xaelwiki";
     group = "xaelwiki";
-    mode = "0440";
+    mode  = "0440";
   };
+
+  services.hermes-agent.environmentFiles = [
+    config.age.secrets."config".path
+  ];
 
   # ── Home Assistant API server ────────────────────────────────────────
   # The main gateway multiplexes the `ha` profile under /p/ha/ on its api_server
   # (127.0.0.1:8443); hermes-ha-proxy.service terminates :8444 and forwards there
   # (streaming, SSE-safe) so Home Assistant talks to a plain OpenAI-compatible
-  #   endpoint on hermesagent.lan:8444. API_SERVER_KEY (the listener key) is
-  #   part of the hermes-secrets hermes.env aggregate, which the module builds
-  #   the default profile's .env from.
+  # endpoint on hermesagent.lan:8444. API_SERVER_KEY (the listener key) comes
+  # from the api-server-env agenix secret and is appended to the default
+  # profile's .env by the module.
   services.hermes-ha = {
     enable = true;
-    apiServerKeyFile = "/run/agenix/hermes.env";
+    apiServerKeyFile = config.age.secrets."config".path;
     # Carried over from the old box's ha profile (hermesagent.lan), adapted:
     # mcp_servers.fixups is deliberately NOT migrated — the ha profile's
     # escalation is now kanban (see modules/ticketing/ha-hermes.md), not the
@@ -228,7 +243,7 @@
   # .env — same pattern as the API_SERVER_KEY / hindsight keys.
   services.hermes-dashboard = {
     enable = true;
-    environmentFile = "/run/agenix/hermes.env";
+    environmentFile = config.age.secrets."config".path;
   };
 
   # ── Cloudflare Tunnel ───────────────────────────────────────────────
@@ -251,7 +266,7 @@
   # bearer token comes from xaelwiki-env; the deploy key from xaelwiki-ssh.
   services.xaelwiki = {
     enable = true;
-    environmentFile = "/run/agenix/xaelwiki.env";
+    environmentFile = config.age.secrets."config".path;
     sshKeyFile = config.age.secrets."xaelwiki-ssh".path;
   };
 
@@ -267,8 +282,8 @@
   # dashboard-env secret only has the scrypt hash).
   services.hermes-nicegui = {
     enable = true;
-    environmentFile = "/run/agenix/hermes-nicegui.env";
-    gatewayTokenFile = "/run/agenix/hermes-nicegui.env";
+    environmentFile = config.age.secrets."config".path;
+    gatewayTokenFile = config.age.secrets."config".path;
     darkMode = true;
   };
 
@@ -280,15 +295,15 @@
   # Operator mandate t_89f84f69: pin model via hermesDeploy.providers so all
   # services (hermes, opencode, hindsight, nicegui, ha) use it.
   hermesDeploy.providers.local = {
-    name = "local";
-    provider = "vllm";
-    model = "QuantTrio/Qwen3.6-35B-A3B-AWQ";
+    name    = "local";
+    provider= "vllm";
+    model   = "QuantTrio/Qwen3.6-35B-A3B-AWQ";
     baseUrl = "http://192.168.193.96:8000/v1";
   };
   hermesDeploy.providers.openrouter = {
-    name = "openrouter";
-    provider = "openrouter";
-    model = "google/gemini-2.5-flash";
+    name    = "openrouter";
+    provider= "openrouter";
+    model   = "google/gemini-2.5-flash";
   };
   hermesDeploy.defaultProvider = "local";
   hermesDeploy.fallbackProviders = [ "openrouter" ];
@@ -319,6 +334,13 @@
     }
   ];
 
+
+  # nix-ld: patch installed executables at build time so their dynamic linker
+  # knows how to find Nix-store libraries (e.g. libstdc++.so.6 for greenlet).
+  # Without this, any pip package with compiled C extensions fails with
+  # "libstdc++.so.6: cannot open shared object file" inside a venv — NixOS's
+  # stub-dynamic-linker doesn't search /nix/store/…/lib by default.
+  nix.enableNixld = true;
   nix.settings = {
     experimental-features = [
       "nix-command"
@@ -424,18 +446,6 @@
   # and cron exprs mean LOCAL wall time year-round, DST included.
   time.timeZone = "America/Halifax";
   system.stateVersion = "26.05";
-
-  # ── NixOS dynamic linker ────────────────────────────────────────────
-  # programs.nix-ld: installs a custom dynamic linker (ld-linux) that knows
-  # about all Nix store libraries. Without this, non-Nix processes
-  # (virtualenv Python, system Python, Playwright, any pip-installed C
-  # extension) cannot find libstdc++.so.6, libpython, etc. — they only see
-  # /lib and /usr/lib which are empty on NixOS. Required for pip installs,
-  # virtualenvs, and any compiled Python packages in user-managed environments.
-  programs.nix-ld.enable = true;
-  programs.nix-ld.libraries = [
-    "${pkgs.stdenv.cc.cc.lib}/lib"
-  ];
 
   # configfs cannot be mounted in an unprivileged LXC, so the default
   # sys-kernel-config.mount fails at every boot/switch. switch-to-configuration

@@ -79,11 +79,10 @@
         "uv2nix": "uv2nix"
       },
       "locked": {
-        "lastModified": 1788794325,
-        "narHash": "sha256-Aeimui+Nhqm/p4uMlYUDYas9cCXVDfIb5fI47uP9BuU=",
-        "ref": "refs/heads/master",
-        "rev": "3cdfc8f85009c71df7121c0d36afd2d617a763d5",
-        "revCount": 32272,
+        "lastModified": 1788793943,
+        "narHash": "sha256-k3B2TD1ehafukLGtrJ8rM+Rmwo+JCxMVl56THi+M3us=",
+        "rev": "283e677ed67a59fb118e2251f819483f23b80c02",
+        "revCount": 32558,
         "shallow": false,
         "type": "git",
         "url": "file:./vendor/hermes-agent"
@@ -99,7 +98,6 @@
       "locked": {
         "lastModified": 1788739627,
         "narHash": "sha256-ymoszBbj3aNutAoAjCjx8Qxf1Qtps+JmiPe+C1IAJFw=",
-        "ref": "refs/heads/main",
         "rev": "f2abcb3f8973f7b155555f4e955d72d257035fbd",
         "revCount": 43,
         "type": "git",
@@ -154,11 +152,11 @@
     },
     "nixpkgs": {
       "locked": {
-        "lastModified": 1786599213,
-        "narHash": "sha256-yNJd40f11EzXBjSByCB7IPpeFFAdeoSKKM67dGkfFoU=",
+        "lastModified": 1788614874,
+        "narHash": "sha256-7QYjT2vHLuX9Z1pdxHXDKCbh1CR3D/2rywB9Tx0MPRg=",
         "owner": "NixOS",
         "repo": "nixpkgs",
-        "rev": "0e251e24a4f24e036a084b6b4b2d2491af4167f4",
+        "rev": "c043004d1c6985732bcc1cbc5a9c9aecbbb4e0f0",
         "type": "github"
       },
       "original": {
@@ -293,6 +291,7 @@
       "locked": {
         "lastModified": 1786550284,
         "narHash": "sha256-XH/jle0FMUneujCnSPPqs/Yec7ADruDQwkwlzOB3eIA=",
+        "ref": "refs/heads/main",
         "rev": "887a93054f535a8d18688960253833839fcac28d",
         "revCount": 15,
         "type": "git",
