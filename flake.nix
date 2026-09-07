@@ -23,12 +23,12 @@
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
 
     # Hermes ships its own flake + NixOS module. PINNED as a GitHub input:
-    # the traverseda fork of hermes-agent. Changes land by pushing to the
+    # the hermes-3640 fork of hermes-agent. Changes land by pushing to the
     # fork, running `nix flake lock --update-input hermes-agent` in this
     # repo, then deploying a new generation. The input is `inputs.nixpkgs`
     # followed to this repo's nixpkgs, so no stale/parallel pkgs.
     hermes-agent = {
-      url = "github:traverseda/hermes-agent";
+      url = "github:hermes-3640/hermes-agent";
       inputs.nixpkgs.follows = "nixpkgs";
     };
 
@@ -37,11 +37,11 @@
     # themselves — modules/hermes-nicegui.nix and modules/xaelwiki.nix
     # build a package from the fetched source.
     hermes-nicegui-src = {
-      url = "github:traverseda/hermes-nicegui";
+      url = "github:hermes-3640/hermes-nicegui";
       flake = false;
     };
     xaelwiki-src = {
-      url = "github:traverseda/xaelWiki";
+      url = "github:hermes-3640/xaelWiki";
       flake = false;
     };
 

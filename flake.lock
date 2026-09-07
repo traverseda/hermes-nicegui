@@ -81,13 +81,13 @@
       "locked": {
         "lastModified": 1788816641,
         "narHash": "sha256-Ptd71VtGHZl7/Sqq9IR/S5OBO87jUso86rbhlONDCLM=",
-        "owner": "traverseda",
+        "owner": "hermes-3640",
         "repo": "hermes-agent",
         "rev": "6178e9f4eed8d99f4fc550add939d58c7bed6206",
         "type": "github"
       },
       "original": {
-        "owner": "traverseda",
+        "owner": "hermes-3640",
         "repo": "hermes-agent",
         "type": "github"
       }
@@ -97,13 +97,13 @@
       "locked": {
         "lastModified": 1788787066,
         "narHash": "sha256-B7dQ1ELhqdKObB1XUASC/EGwyzoPUgIWBm9WgvXo+gE=",
-        "owner": "traverseda",
+        "owner": "hermes-3640",
         "repo": "hermes-nicegui",
         "rev": "2af0d22a00fdd5c215921656fe614d6a9c178164",
         "type": "github"
       },
       "original": {
-        "owner": "traverseda",
+        "owner": "hermes-3640",
         "repo": "hermes-nicegui",
         "type": "github"
       }
@@ -291,13 +291,13 @@
       "locked": {
         "lastModified": 1786550284,
         "narHash": "sha256-XH/jle0FMUneujCnSPPqs/Yec7ADruDQwkwlzOB3eIA=",
-        "owner": "traverseda",
+        "owner": "hermes-3640",
         "repo": "xaelWiki",
         "rev": "887a93054f535a8d18688960253833839fcac28d",
         "type": "github"
       },
       "original": {
-        "owner": "traverseda",
+        "owner": "hermes-3640",
         "repo": "xaelWiki",
         "type": "github"
       }

@@ -76,7 +76,7 @@ scripts/patch-hermes.sh --dry-run        # verify patches (see patches/README.md
 
 ## Editing vendored source (hermes-agent / hermes-nicegui / xaelWiki)
 
-Vendored sources are pinned as GitHub flake inputs (`github:traverseda/<repo>`).
+Vendored sources are pinned as GitHub flake inputs (`github:hermes-3640/<repo>`).
 To push a code change:
 
 ```sh
@@ -273,6 +273,6 @@ scripts/patch-hermes.sh              # applies, pushes, re-locks, builds
 ```
 
 The script pushes the patch series to the fork's `patched` branch and re-points
-the hermes-agent flake input to `github:traverseda/hermes-agent/patched`.
+the hermes-agent flake input to `github:hermes-3640/hermes-agent/patched`.
 The bot (on the LXC) cannot push to the fork — patch authoring runs on the
 build machine.

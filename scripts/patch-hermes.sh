@@ -63,8 +63,8 @@ if [[ -n "$UPDATE_UPSTREAM" ]]; then
 fi
 
 if [[ "$DRY_RUN" != true ]]; then
-  : "${HERMES_FORK:?set HERMES_FORK (flake URL of your fork, e.g. github:traverseda/hermes-agent)}"
-  : "${HERMES_FORK_REMOTE:?set HERMES_FORK_REMOTE (git URL to push, e.g. git@github.com:traverseda/hermes-agent.git)}"
+  : "${HERMES_FORK:?set HERMES_FORK (flake URL of your fork, e.g. github:github:hermes-3640/hermes-agent)}"
+  : "${HERMES_FORK_REMOTE:?set HERMES_FORK_REMOTE (git URL to push, e.g. git@github.com:github:hermes-3640/hermes-agent.git)}"
 fi
 
 PATCH_FILES=()
