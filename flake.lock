@@ -79,10 +79,10 @@
         "uv2nix": "uv2nix"
       },
       "locked": {
-        "lastModified": 1788793836,
-        "narHash": "sha256-Dc/We4NBygX4XZ6Z9AnUoIapBS+9kOKRWoxXznDiQBA=",
-        "rev": "42da1f2cf444028e1da708760394040f493f2e43",
-        "revCount": 32554,
+        "lastModified": 1788793943,
+        "narHash": "sha256-k3B2TD1ehafukLGtrJ8rM+Rmwo+JCxMVl56THi+M3us=",
+        "rev": "283e677ed67a59fb118e2251f819483f23b80c02",
+        "revCount": 32558,
         "shallow": false,
         "type": "git",
         "url": "file:./vendor/hermes-agent"
