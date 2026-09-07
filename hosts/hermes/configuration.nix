@@ -439,7 +439,7 @@
   # virtualenvs, and any compiled Python packages in user-managed environments.
   programs.nix-ld.enable = true;
   programs.nix-ld.libraries = [
-    "${pkgs.gcc.lib}/lib"
+    "${pkgs.stdenv.cc.cc.lib}/lib"
   ];
 
   # configfs cannot be mounted in an unprivileged LXC, so the default
