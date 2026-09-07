@@ -78,13 +78,11 @@ in
         RuntimeDirectory = "playwright-mcp";
 
         # Where to find Playwright-installed browsers.
-        PLAYWRIGHT_BROWSERS_PATH = "${pkgs.playwright.browsers}";
-
-        # Defaults: use Firefox for all browser sessions.
-        PLAYWRIGHT_MCP_BROWSER = "firefox";
-
-        # Writable Firefox profile for persistent cookies/cache.
-        PLAYWRIGHT_MCP_USER_DATA_DIR = "${runtimeStatePath}/firefox-profile";
+        Environment = [
+          "PLAYWRIGHT_BROWSERS_PATH=${pkgs.playwright.browsers}"
+          "PLAYWRIGHT_MCP_BROWSER=firefox"
+          "PLAYWRIGHT_MCP_USER_DATA_DIR=${runtimeStatePath}/firefox-profile"
+        ];
 
         ExecStart = "${pkgs.playwright-mcp}/bin/playwright-mcp";
 
