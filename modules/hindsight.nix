@@ -387,6 +387,24 @@ in
       install -d -o ${toString cfg.uid} -g ${toString cfg.gid} -m 0755 ${cfg.stateDir}
     '';
 
+    # Override the hindsight health check default so the port follows
+    # `apiPort` — operators who change the port won't need to also fix
+    # the health check separately. (If they provide all 5 defaults,
+    # they can override hindsight themselves, same as agent/tailnet/etc.)
+    services.hermes-deploy.health.checks.hindsight = lib.mkIf cfg.enable {
+      what = "hindsight API health (${toString cfg.apiPort}/health)";
+      check = ''
+        set -uo pipefail
+        api="http://127.0.0.1:${toString cfg.apiPort}/health"
+        deadline=$((SECONDS + 90))
+        while ! http_code=$(curl -sf --max-time 5 -o /dev/null -w "%{http_code}" "$api" 2>/dev/null || echo "000"); do
+          if [ "$http_code" = "401" ] || [ "$http_code" = "200" ]; then break; fi
+          if (( SECONDS >= deadline )); then exit 1; fi
+          sleep 5
+        done
+      '';
+    };
+
     # Apply code-optimised retain config to exactly the banks in `codeBanks`,
     # once the API is healthy. Global settings stay neutral so non-code banks
     # are unaffected. NOT a wantedBy unit — should only be run manually

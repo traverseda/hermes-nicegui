@@ -173,7 +173,7 @@
           inherit nixpkgs hermes-agent;
         };
         hindsight-config-check = import ./tests/hindsight-config-check.nix {
-          inherit nixpkgs;
+          inherit nixpkgs hermes-agent;
         };
         dashboard-config-check = import ./tests/dashboard-config-check.nix {
           inherit nixpkgs hermes-agent;

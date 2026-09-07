@@ -80,7 +80,7 @@ let
 
   # Health check registry — defaults plus any user additions.
   # If user overrides any check, it replaces the default by key name.
-  # If user provides all four default keys (agent, tailnet, zerotier, tunnel),
+  # If user provides all five default keys (agent, tailnet, zerotier, tunnel, hindsight),
   # those completely replace the defaults (user has full control).
   healthChecks =
     let
@@ -111,13 +111,31 @@ let
           what = "cloudflared tunnel connectivity";
           check = "systemctl is-active --quiet cloudflared-tunnel";
         };
+        hindsight = {
+          what = "hindsight API health";
+          check = ''
+            set -uo pipefail
+            deadline=$((SECONDS + 90))
+            while ! http_code=$(curl -sf --max-time 5 -o /dev/null -w "%{http_code}" http://127.0.0.1:8888/health 2>/dev/null || echo "000"); do
+              if [ "$http_code" = "401" ] || [ "$http_code" = "200" ]; then break; fi
+              if (( SECONDS >= deadline )); then exit 1; fi
+              sleep 5
+            done
+          '';
+        };
       };
       userChecks = cfg.health.checks;
       allUser = lib.all (_: true) (lib.attrNames _defaults);
       hasUserAll = lib.all (n: lib.hasAttr n userChecks) (lib.attrNames _defaults);
+      hindsightEnabled = config ? services.hindsight && config.services.hindsight.enable;
     in
     if hasUserAll then userChecks
-    else _defaults // userChecks;
+    else
+      let
+        withHindsight = _defaults // userChecks;
+        withoutHindsight = (builtins.removeAttrs _defaults [ "hindsight" ]) // userChecks;
+      in
+      if hindsightEnabled then withHindsight else withoutHindsight;
 
   # Store path for each check script
   healthScripts = lib.mapAttrs (name: check:
@@ -447,7 +465,7 @@ in
         {what, check}. Each entry generates a oneshot systemd unit
         hermes-health-<name>.service and is invoked during the deploy gate.
         Add entries to hang future health checks off this structure.
-        Defaults (agent, tailnet, zerotier, tunnel) always present.
+        Defaults (agent, tailnet, zerotier, tunnel, hindsight) always present.
       '';
     };
 

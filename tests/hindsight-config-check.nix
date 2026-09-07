@@ -6,7 +6,7 @@
 #
 # Run with:  nix build .#checks.x86_64-linux.hindsight-config-check
 
-{ nixpkgs }:
+{ nixpkgs, hermes-agent }:
 let
   system = "x86_64-linux";
   inherit (nixpkgs) lib;
@@ -17,6 +17,8 @@ let
       inherit system;
       modules = [
         ../modules/config.nix
+        hermes-agent.nixosModules.default
+        ../modules/hermes-deploy.nix
         ../modules/hindsight.nix
         ../modules/exposure.nix
         {
@@ -28,6 +30,10 @@ let
           };
           hermesDeploy.defaultProvider = "local";
           hermesDeploy.hindsight.provider = "openai";
+
+          # hermes-deploy defaults reference hermes-agent config for health checks
+          services.hermes-deploy.enable = true;
+          services.hermes-agent.enable = lib.mkForce true;
 
           services.hindsight = {
             enable = true;
