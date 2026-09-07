@@ -493,15 +493,15 @@ in
       path = [ config.system.path ];
       serviceConfig = {
         Type = "oneshot";
-        # Guard: validates rollback targets exist. If guard exits 0 (no target)
-        # → unit stays active, OnFailure doesn't fire. If guard exits 1
-        # (targets exist but recovery failed) → OnFailure to rollback-run.
         ExecStartPre = recoveryGuardScript;
         ExecStart = contentRecoveryScript;
         RemainAfterExit = true;
         MemoryMax = cfg.switchMemoryMax;
-        OnFailure = "hermes-rollback-run.service";
       };
+      # OnFailure belongs in the [Unit] section, not [Service].
+      # NixOS maps this to the OnFailure= key in [Unit] (not serviceConfig,
+      # which goes in [Service]).
+      onFailure = "hermes-rollback-run.service";
     };
 
     # The actual rollback run as a oneshot (not a timer or watchdog):
@@ -543,11 +543,11 @@ in
     #   The default from hermes-service.nix (hermes-content-recovery-run)
     #   stands when contentRecovery is non-empty; only overridden when
     #   empty to prevent a no-op recovery from suppressing escalation.
-    systemd.services.hermes-agent.serviceConfig.OnFailure =
-      lib.mkIf (cfg.contentRecovery == "") (lib.mkForce "hermes-rollback-run.service");
     # Nicegui always goes to hermes-nicegui-restart (UI crash, no Nix impact).
-    systemd.services.hermes-nicegui.serviceConfig.OnFailure =
-      "hermes-nicegui-restart.service";
+    systemd.services.hermes-agent.onFailure =
+      lib.mkIf (cfg.contentRecovery == "") (lib.mkForce "hermes-rollback-run.service");
+    systemd.services.hermes-nicegui.onFailure =
+      (lib.mkForce "hermes-nicegui-restart.service");
 
     # Keep enough generations that rollback always has somewhere to go.
     # Weekly GC with a 14-day window preserves at least two weeks of

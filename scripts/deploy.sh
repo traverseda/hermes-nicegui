@@ -115,6 +115,11 @@ ssh "$HOST" "$STORE_PATH/bin/switch-to-configuration switch 2>&1 | tee -a /var/l
 
 echo "== activation complete =="
 
+# Sync the bot's workspace copy to the deployed repo.
+# The bot self-deploys from /var/lib/hermes/workspace/hermes-deploy, which
+# otherwise drifts from the system flake at /var/lib/hermes-deploy.
+ssh "$HOST" 'git -C /var/lib/hermes/workspace/hermes-deploy reset --hard 2>/dev/null || true'
+
 # ── 5. Health check ───────────────────────────────────────────────────
 echo "== health check =="
 ssh "$HOST" "
