@@ -1,0 +1,134 @@
+#!/usr/bin/env bash
+# vendor-deploy — Atomically commit a vendor submodule, update flake.lock,
+# and optionally deploy.  Wraps the 4-step sequence so the bot never forgets
+# the `nix flake lock` step (the #1 source of deploy failures).
+#
+# Usage:
+#   vendor-deploy <submodule> "<commit-message>" [deploy]
+#
+# Steps performed:
+#   1. git add -A && commit  inside the vendor submodule
+#   2. nix flake lock --update-input  <input-name>    ← the critical step
+#   3. git add vendor/ flake.lock && commit  in outer repo
+#   4. (optional) nix flake check --no-build  to validate
+#   5. (optional) hermes-deploy  (triggers the systemd oneshot unit)
+#
+# Environment:
+#   VENDOR_DEPLOY_DIR  path to the flake repo (default: /var/lib/hermes-deploy)
+#   VENDOR_DEPLOY_FLAKE_ATTR  flake attribute to deploy (default: hermes)
+
+set -euo pipefail
+
+REPO_DIR="${VENDOR_DEPLOY_DIR:-$(pwd)}"
+
+usage() {
+  cat <<EOF
+Usage: vendor-deploy <submodule> "<commit-msg>" [--deploy] [--dry-run]
+
+Submodule names:
+  hermes-agent        → input name: hermes-agent
+  hermes-nicegui      → input name: hermes-nicegui-src
+  xaelWiki            → input name: xaelwiki-src
+
+Dry-run: validate (flake check --no-build) without deploying.
+Deploy: trigger hermes-deploy.service after commit.
+EOF
+  exit 1
+}
+
+[[ $# -lt 2 ]] || [[ "$1" = "--help" ]] && usage
+
+SUBMODULE="$1"
+shift
+MSG="$1"
+shift
+
+# Map submodule path → flake input name
+declare -A INPUT_NAME_MAP=(
+  [vendor/hermes-agent]=hermes-agent
+  [vendor/hermes-nicegui]=hermes-nicegui-src
+  [vendor/xaelWiki]=xaelwiki-src
+)
+
+if [[ -z "${INPUT_NAME_MAP[$SUBMODULE]+x}" ]]; then
+  echo "ERROR: unknown submodule '$SUBMODULE'. Use one of: ${!INPUT_NAME_MAP[*]}" >&2
+  exit 1
+fi
+
+INPUT_NAME="${INPUT_NAME_MAP[$SUBMODULE]}"
+
+# --- helpers
+log() { echo "[vendor-deploy] $*"; }
+die() { echo "[vendor-deploy] ERROR: $*" >&2; exit 1; }
+
+# --- Step 1: Commit inside the vendor submodule
+log "Step 1/5: Committing vendor submodule '$SUBMODULE'"
+if ! git -C "$REPO_DIR/$SUBMODULE" diff --cached --quiet 2>/dev/null && \
+   ! git -C "$REPO_DIR/$SUBMODULE" diff --quiet 2>/dev/null; then
+  git -C "$REPO_DIR/$SUBMODULE" add -A
+  git -C "$REPO_DIR/$SUBMODULE" commit -q -m "$MSG" || true
+else
+  log "  No changes in '$SUBMODULE' to commit"
+fi
+
+# --- Step 2: Update flake.lock with the new commit hash
+log "Step 2/5: Updating flake.lock ($INPUT_NAME)"
+if ! nix flake lock --update-input "$INPUT_NAME" --override-input "$INPUT_NAME" "git+file:${REPO_DIR}/${SUBMODULE}" 2>&1; then
+  log "  nix flake lock failed — the submodule may not have new commits or the input name is wrong"
+  die "nix flake lock --update-input $INPUT_NAME failed"
+fi
+
+# --- Step 3: Commit the outer repo (gitlink + flake.lock)
+log "Step 3/5: Committing outer repo (new gitlink + flake.lock)"
+if ! git -C "$REPO_DIR" add "vendor/$SUBMODULE" flake.lock; then
+  log "  git add failed — vendor/ may not be tracked (unusual)"
+fi
+
+if ! git -C "$REPO_DIR" diff --cached --quiet 2>/dev/null; then
+  git -C "$REPO_DIR" commit -q -m "$SUBMODULE: $MSG" || die "outer repo commit failed"
+else
+  log "  No changes to commit in outer repo (gitlink was already at this rev)"
+fi
+
+# --- Step 4: Validate with flake check
+log "Step 4/5: Validating with nix flake check --no-build"
+DRY_RUN=false
+DEPLOY=false
+
+for arg in "$@"; do
+  case "$arg" in
+    --dry-run)  DRY_RUN=true ; break ;;
+    --deploy)   DEPLOY=true ;;
+  esac
+done
+
+if nix -C "$REPO_DIR" flake check --no-build 2>&1; then
+  log "  validation passed"
+else
+  # If --deploy was explicitly requested, fail hard
+  # If --dry-run was requested, warn but continue
+  if $DEPLOY; then
+    die "flake check failed — not deploying. Fix the error and try again."
+  else
+    log "  WARNING: flake check failed (continuing without --deploy)"
+  fi
+fi
+
+# --- Step 5: Deploy
+if $DRY_RUN; then
+  log "Dry run complete. No deploy performed."
+elif $DEPLOY; then
+  log "Step 5/5: Deploying with hermes-deploy (systemd unit)"
+  if command -v hermes-deploy >/dev/null 2>&1; then
+    hermes-deploy
+  elif command -v nixos-rebuild >/dev/null 2>&1; then
+    log "  hermes-deploy not found; falling back to nixos-rebuild --flake"
+    nixos-rebuild switch --flake "$REPO_DIR#$VENDOR_DEPLOY_FLAKE_ATTR" --max-jobs 1 --cores 2 2>&1 \
+      | tee -a /var/log/hermes-deploy.log
+  else
+    die "neither hermes-deploy nor nixos-rebuild found on PATH"
+  fi
+  log "Deploy initiated. Check health with 'hermes-status'."
+else
+  log "Done. To deploy, run the same command with --deploy or run 'hermes-deploy'."
+fi
