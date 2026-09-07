@@ -51,14 +51,18 @@ in-process code that can break the gateway on a bad edit.
 ## Commands
 
 ```sh
-nix flake check               # build + all *-config-check tests (fast eval-time)
-nix run .#hermes-vm           # boot local test VM (same modules, no proxmox)
-scripts/test.sh check         # same as nix flake check
-scripts/test.sh vm            # same as nix run .#hermes-vm
-scripts/deploy.sh [--dry-run] # build locally, push closure, activate LXC (needs zerotier)
-scripts/rollback.sh           # step back one generation + git reset
-scripts/patch-hermes.sh --dry-run    # verify patches without pushing (see patches/README.md)
+nix flake check --no-build              # eval-only: fast checks, no builds
+nix flake check                          # full build + all *-config-check tests
+nix flake check --no-build               # eval-only — use this by default
+nix run .#hermes-vm                      # boot local test VM
+scripts/test.sh check                    # same as nix flake check
+scripts/test.sh vm                       # same as nix run .#hermes-vm
+scripts/deploy.sh [--dry-run]            # build locally, push closure, activate LXC
+scripts/rollback.sh                      # step back one generation + git reset
+scripts/patch-hermes.sh --dry-run        # verify patches (see patches/README.md)
 ```
+
+> **Rule:** Always use `nix flake check --no-build` unless a real build is explicitly needed. The `--no-build` flag runs eval-time config checks instantly (seconds) without building derivations. Only run without `--no-build` when you specifically need to verify that derivations build correctly.
 
 ## Editing vendor submodules (hermes-agent / hermes-nicegui / xaelWiki)
 

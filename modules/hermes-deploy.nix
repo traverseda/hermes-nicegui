@@ -100,29 +100,20 @@ let
     ''
   );
 
-  # Roll back exactly one generation WITHOUT nixos-rebuild. nixos-rebuild's
-  # `--rollback` self-locates by building itself from <nixpkgs/nixos>, which
-  # needs NIX_PATH (nixpkgs + nixos-config) — a flake-only box doesn't have
-  # those, so it fails with "file 'nixos-config' was not found". The low-level
-  # equivalent is identical in effect: `nix-env --rollback` moves the system
-  # profile marker back one generation (it does NOT create a new generation),
-  # then we re-run that generation's own switch-to-configuration.
+  # Roll back one generation. `nixos-rebuild switch --rollback` is the proper
+  # NixOS-native rollback mechanism — it uses nix-env --rollback to find the
+  # previous generation, then runs that generation's switch-to-configuration.
+  # This handles unit ordering, activation scripts, and profile switching
+  # atomically; manual nix-env --rollback leaves the system in an
+  # indeterminate state (units like zerotierone may never be enabled,
+  # activation scripts only run partially).
   #
-  # switch-to-configuration is run as a DETACHED transient unit: it treats any
-  # active-but-unwanted unit (wantedBy=[]) as "to stop", and hermes-rollback /
-  # hermes-deploy are exactly that while they run the switch
-  # — a foreground switch gets TERM'd mid-flight (observed: "stopping the
-  # following units: hermes-rollback.service"). As a transient unit the switch
-  # survives that stop.
+  # Note: --rollback is mutually exclusive with --flake/--file/--attr, so
+  # we only pass the --rollback flag here. The profile already knows which
+  # generation to roll back to.
   rollbackGeneration = ''
-    # nix-env --rollback returns failure on a single-generation system —
-    # that is fine; the git-sync step below is what matters.
-    nix-env -p /nix/var/nix/profiles/system --rollback 2>&1 \
-      | tee -a /var/log/hermes-deploy.log \
-      || true
-    /nix/var/nix/profiles/system/bin/switch-to-configuration switch 2>&1 \
-      | tee -a /var/log/hermes-deploy.log \
-      || true
+    nixos-rebuild switch --rollback 2>&1 \
+      | tee -a /var/log/hermes-deploy.log
   '';
 
   # Bash functions shared by all scripts below (deploy/rollback/
@@ -308,6 +299,22 @@ in
       description = "Git checkout of this flake on the target host.";
     };
 
+    # ── LLM provider info for health check ─────────────────────────────
+    # The healthCheck script needs to know the model endpoint and model
+    # name to validate the API actually works. These are populated by the
+    # host config; empty = no real API test (only checks that hermes-agent
+    # is active and respondent).
+    llmBaseUrl = lib.mkOption {
+      type = lib.types.nullOr lib.types.str;
+      default = null;
+      description = "The configured LLM API base URL for the health check.";
+    };
+    llmModel = lib.mkOption {
+      type = lib.types.nullOr lib.types.str;
+      default = null;
+      description = "The configured LLM model name for the health check.";
+    };
+
     flakeAttr = lib.mkOption {
       type = lib.types.str;
       default = "hermes";
@@ -348,16 +355,37 @@ in
     healthCheck = lib.mkOption {
       type = lib.types.str;
       default = ''
-        # Ask the service itself: the unit must be active AND `hermes
-        # doctor` (the agent's own self-diagnostic) must pass. Derived from the
-        # agent's own options so it stays coherent if stateDir/user change.
+        # Service must be active AND (if LLM config is provided) a real chat
+        # completion must succeed. This is the "can you hear me" test: send a
+        # minimal message to the configured model endpoint and verify a
+        # response arrives. No proxy checks — if the API key is wrong, the
+        # model doesn't exist, or the endpoint is unreachable, this fails.
         systemctl is-active --quiet hermes-agent \
-          && runuser -u ${config.services.hermes-agent.user} -- env HERMES_HOME=${config.services.hermes-agent.stateDir}/.hermes \
-               hermes doctor >/dev/null 2>&1
+          && [ -n "${cfg.llmBaseUrl}" ] && [ -n "${cfg.llmModel}" ] \
+          && API_KEY=$(${pkgs.gnugrep}/bin/grep "^LLM_API_KEY=" \
+                "${config.services.hermes-agent.stateDir}/.hermes/.env" \
+              | ${pkgs.coreutils}/bin/head -1 | ${pkgs.coreutils}/bin/cut -d= -f2-) \
+             && CUR_URL="${cfg.llmBaseUrl}" \
+             && CUR_MODEL="${cfg.llmModel}" \
+             && [ -n "$API_KEY" ] && [ -n "$CUR_URL" ] \
+             && PAYLOAD=$(${pkgs.jq}/bin/jq -n \
+                  --arg model "$CUR_MODEL" \
+                  '{model: $model, messages: [{role: "user", content: "Reply with exactly one word: ping"}], max_tokens: 8}') \
+             && curl -s --max-time 30 -H "Authorization: Bearer $API_KEY" \
+                  -H "Content-Type: application/json" \
+                  -d "$PAYLOAD" \
+                  "$CUR_URL/v1/chat/completions" 2>/dev/null \
+               | ${pkgs.jq}/bin/jq -r '.choices[0].message.content // ""' 2>/dev/null \
+               | ${pkgs.gnugrep}/bin/grep -qi "ping"
       '';
       description = ''
-        Bash command; exit 0 = healthy. Runs as root and should ask Hermes
-        itself (hermes-agent active + hermes doctor).
+        Bash command; exit 0 = healthy. Checks hermes-agent is active and,
+        if llmBaseUrl + llmModel are set, performs a real chat completion
+        against the model endpoint: sends a minimal "Reply with exactly one
+        word: ping" message via the OpenAI compatible API, reads the
+        response and confirms the reply actually arrived and contains the
+        word "ping". No proxy tests — this exhausts the full path: API key,
+        endpoint reachability, model availability, and response parsing.
       '';
     };
 
@@ -471,13 +499,28 @@ in
       ${lib.getExe pkgs.git} -C ${cfg.repoDir} rm -r --cached state 2>/dev/null || true
     '';
 
+    # When hermes-deploy.service runs `nixos-rebuild switch`, the activation
+    # cycle reconfigures systemd and kills all units from the OLD generation —
+    # including hermes-deploy itself. The script never reaches the health-check
+    # (it dies with SIGTERM mid-build).
+    #
+    # Fix: ExecStart does NOT run the script directly. Instead it forks the
+    # script into a new session group (setsid) that is completely detached
+    # from systemd's cgroup. systemd marks the unit as "exited" immediately,
+    # then when the activation cycle stops the old unit it can't reach the
+    # detached process. The detached process does the build, health-check,
+    # and rollback, writing results to state dir and log file.
     systemd.services.hermes-deploy = {
       description = "Deploy Hermes from git and health-check (with auto-rollback)";
       wantedBy = [ ];
       path = [ config.system.path ];
       serviceConfig = {
         Type = "oneshot";
-        ExecStart = deployScript;
+        # Fork into new session → detached from systemd → survives activation
+        # cycle that would otherwise kill this unit mid-execution.
+        # ">/dev/null 2>&1 < /dev/null" closes standard fds so the detached
+        # process doesn't hold onto the old generation's ptmx/sockets.
+        ExecStart = "${pkgs.coreutils}/bin/setsid ${deployScript} >/dev/null 2>&1 < /dev/null";
         TimeoutStartSec = 0;
         MemoryMax = cfg.switchMemoryMax;
       };
@@ -489,7 +532,7 @@ in
       path = [ config.system.path ];
       serviceConfig = {
         Type = "oneshot";
-        ExecStart = rollbackScript;
+        ExecStart = "${pkgs.coreutils}/bin/setsid ${rollbackScript} >/dev/null 2>&1 < /dev/null";
         TimeoutStartSec = 0;
         MemoryMax = cfg.switchMemoryMax;
       };
