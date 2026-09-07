@@ -23,9 +23,56 @@
         "type": "github"
       }
     },
+    "agenix_2": {
+      "inputs": {
+        "darwin": "darwin_2",
+        "home-manager": "home-manager_2",
+        "nixpkgs": [
+          "hermes-agent",
+          "nixpkgs"
+        ],
+        "systems": "systems_2"
+      },
+      "locked": {
+        "lastModified": 1770165109,
+        "narHash": "sha256-9VnK6Oqai65puVJ4WYtCTvlJeXxMzAp/69HhQuTdl/I=",
+        "owner": "ryantm",
+        "repo": "agenix",
+        "rev": "b027ee29d959fda4b60b57566d64c98a202e0feb",
+        "type": "github"
+      },
+      "original": {
+        "owner": "ryantm",
+        "repo": "agenix",
+        "type": "github"
+      }
+    },
     "darwin": {
       "inputs": {
         "nixpkgs": [
+          "agenix",
+          "nixpkgs"
+        ]
+      },
+      "locked": {
+        "lastModified": 1744478979,
+        "narHash": "sha256-dyN+teG9G82G+m+PX/aSAagkC+vUv0SgUw3XkPhQodQ=",
+        "owner": "lnl7",
+        "repo": "nix-darwin",
+        "rev": "43975d782b418ebf4969e9ccba82466728c2851b",
+        "type": "github"
+      },
+      "original": {
+        "owner": "lnl7",
+        "ref": "master",
+        "repo": "nix-darwin",
+        "type": "github"
+      }
+    },
+    "darwin_2": {
+      "inputs": {
+        "nixpkgs": [
+          "hermes-agent",
           "agenix",
           "nixpkgs"
         ]
@@ -49,6 +96,7 @@
       "inputs": {
         "nixpkgs-lib": [
           "hermes-agent",
+          "hermes-agent",
           "nixpkgs"
         ]
       },
@@ -68,9 +116,35 @@
     },
     "hermes-agent": {
       "inputs": {
-        "flake-parts": "flake-parts",
-        "home-manager": "home-manager_2",
+        "agenix": "agenix_2",
+        "hermes-agent": "hermes-agent_2",
+        "hermes-nicegui-src": "hermes-nicegui-src",
         "nixpkgs": [
+          "nixpkgs"
+        ],
+        "xaelwiki-src": "xaelwiki-src"
+      },
+      "locked": {
+        "lastModified": 1788793198,
+        "narHash": "sha256-dlaQuqWZFwXQQYlgbYFlkl9ao9teif2SH3qaegEh+s0=",
+        "ref": "refs/heads/nix-ld-fix",
+        "rev": "480b53ef6f9c83e149dc5af7cc8a60b14dc680f0",
+        "revCount": 85,
+        "type": "git",
+        "url": "file:///var/lib/hermes-deploy"
+      },
+      "original": {
+        "shallow": false,
+        "type": "git",
+        "url": "file:./vendor/hermes-agent"
+      }
+    },
+    "hermes-agent_2": {
+      "inputs": {
+        "flake-parts": "flake-parts",
+        "home-manager": "home-manager_3",
+        "nixpkgs": [
+          "hermes-agent",
           "nixpkgs"
         ],
         "npm-lockfile-fix": "npm-lockfile-fix",
@@ -110,6 +184,22 @@
         "url": "file:./vendor/hermes-nicegui"
       }
     },
+    "hermes-nicegui-src_2": {
+      "flake": false,
+      "locked": {
+        "lastModified": 1788787066,
+        "narHash": "sha256-B7dQ1ELhqdKObB1XUASC/EGwyzoPUgIWBm9WgvXo+gE=",
+        "ref": "refs/heads/main",
+        "rev": "2af0d22a00fdd5c215921656fe614d6a9c178164",
+        "revCount": 49,
+        "type": "git",
+        "url": "file:./vendor/hermes-nicegui"
+      },
+      "original": {
+        "type": "git",
+        "url": "file:./vendor/hermes-nicegui"
+      }
+    },
     "home-manager": {
       "inputs": {
         "nixpkgs": [
@@ -135,6 +225,29 @@
       "inputs": {
         "nixpkgs": [
           "hermes-agent",
+          "agenix",
+          "nixpkgs"
+        ]
+      },
+      "locked": {
+        "lastModified": 1745494811,
+        "narHash": "sha256-YZCh2o9Ua1n9uCvrvi5pRxtuVNml8X2a03qIFfRKpFs=",
+        "owner": "nix-community",
+        "repo": "home-manager",
+        "rev": "abfad3d2958c9e6300a883bd443512c55dfeb1be",
+        "type": "github"
+      },
+      "original": {
+        "owner": "nix-community",
+        "repo": "home-manager",
+        "type": "github"
+      }
+    },
+    "home-manager_3": {
+      "inputs": {
+        "nixpkgs": [
+          "hermes-agent",
+          "hermes-agent",
           "nixpkgs"
         ]
       },
@@ -154,11 +267,11 @@
     },
     "nixpkgs": {
       "locked": {
-        "lastModified": 1786599213,
-        "narHash": "sha256-yNJd40f11EzXBjSByCB7IPpeFFAdeoSKKM67dGkfFoU=",
+        "lastModified": 1788614874,
+        "narHash": "sha256-7QYjT2vHLuX9Z1pdxHXDKCbh1CR3D/2rywB9Tx0MPRg=",
         "owner": "NixOS",
         "repo": "nixpkgs",
-        "rev": "0e251e24a4f24e036a084b6b4b2d2491af4167f4",
+        "rev": "c043004d1c6985732bcc1cbc5a9c9aecbbb4e0f0",
         "type": "github"
       },
       "original": {
@@ -171,6 +284,7 @@
     "npm-lockfile-fix": {
       "inputs": {
         "nixpkgs": [
+          "hermes-agent",
           "hermes-agent",
           "nixpkgs"
         ]
@@ -193,13 +307,16 @@
       "inputs": {
         "nixpkgs": [
           "hermes-agent",
+          "hermes-agent",
           "nixpkgs"
         ],
         "pyproject-nix": [
           "hermes-agent",
+          "hermes-agent",
           "pyproject-nix"
         ],
         "uv2nix": [
+          "hermes-agent",
           "hermes-agent",
           "uv2nix"
         ]
@@ -222,6 +339,7 @@
       "inputs": {
         "nixpkgs": [
           "hermes-agent",
+          "hermes-agent",
           "nixpkgs"
         ]
       },
@@ -243,12 +361,27 @@
       "inputs": {
         "agenix": "agenix",
         "hermes-agent": "hermes-agent",
-        "hermes-nicegui-src": "hermes-nicegui-src",
+        "hermes-nicegui-src": "hermes-nicegui-src_2",
         "nixpkgs": "nixpkgs",
-        "xaelwiki-src": "xaelwiki-src"
+        "xaelwiki-src": "xaelwiki-src_2"
       }
     },
     "systems": {
+      "locked": {
+        "lastModified": 1681028828,
+        "narHash": "sha256-Vy1rq5AaRuLzOxct8nz4T6wlgyUR7zLU309k9mBC768=",
+        "owner": "nix-systems",
+        "repo": "default",
+        "rev": "da67096a3b9bf56a91d16901293e51ba5b49a27e",
+        "type": "github"
+      },
+      "original": {
+        "owner": "nix-systems",
+        "repo": "default",
+        "type": "github"
+      }
+    },
+    "systems_2": {
       "locked": {
         "lastModified": 1681028828,
         "narHash": "sha256-Vy1rq5AaRuLzOxct8nz4T6wlgyUR7zLU309k9mBC768=",
@@ -267,9 +400,11 @@
       "inputs": {
         "nixpkgs": [
           "hermes-agent",
+          "hermes-agent",
           "nixpkgs"
         ],
         "pyproject-nix": [
+          "hermes-agent",
           "hermes-agent",
           "pyproject-nix"
         ]
@@ -293,6 +428,22 @@
       "locked": {
         "lastModified": 1786550284,
         "narHash": "sha256-XH/jle0FMUneujCnSPPqs/Yec7ADruDQwkwlzOB3eIA=",
+        "rev": "887a93054f535a8d18688960253833839fcac28d",
+        "revCount": 15,
+        "type": "git",
+        "url": "file:./vendor/xaelWiki"
+      },
+      "original": {
+        "type": "git",
+        "url": "file:./vendor/xaelWiki"
+      }
+    },
+    "xaelwiki-src_2": {
+      "flake": false,
+      "locked": {
+        "lastModified": 1786550284,
+        "narHash": "sha256-XH/jle0FMUneujCnSPPqs/Yec7ADruDQwkwlzOB3eIA=",
+        "ref": "refs/heads/main",
         "rev": "887a93054f535a8d18688960253833839fcac28d",
         "revCount": 15,
         "type": "git",
