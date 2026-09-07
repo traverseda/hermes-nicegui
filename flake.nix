@@ -106,9 +106,15 @@
         ./modules/exposure.nix
         ./modules/cloudflare-tunnel.nix
         ./modules/xaelwiki.nix
-        ./modules/hermes-nicegui.nix
-        ./modules/hermes-vnc.nix
-        ./modules/playwright-mcp.nix
+        ./opencode.nix
+        ./config.nix
+        ./hindsight.nix
+        ./exposure.nix
+        ./cloudflare-tunnel.nix
+        ./xaelwiki.nix
+        ./hermes-nicegui.nix
+        ./hermes-vnc.nix
+        ./hermes-log-monitor.nix
       ];
 
       hermes = lib.nixosSystem {

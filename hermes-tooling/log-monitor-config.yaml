@@ -1,0 +1,77 @@
+# hermes-log-monitor configuration
+# Path: ~/.hermes/log-monitor/config.yaml
+
+# Services to monitor
+services:
+  hermes-agent:
+    log_files:
+      - /var/lib/hermes/.hermes/logs/agent.log
+      - /var/lib/hermes/.hermes/logs/gateway.log
+    journal_unit: hermes-agent
+    patterns:
+      - regex: "(?i)traceback"
+        description: "Python tracebacks"
+      - regex: "(?i)exception"
+        description: "Python exceptions"
+      - regex: "(?i)\bERROR\b"
+        description: "ERROR log level"
+      - regex: "(?i)failed to connect"
+        description: "Connection failures"
+      - regex: "(?i)connection refused"
+        description: "Connection refused"
+
+  hermes-nicegui:
+    log_files:
+      - /var/lib/hermes/.hermes/logs/gui.log
+      - /var/lib/hermes/.hermes/logs/agent.log
+    journal_unit: hermes-nicegui
+    patterns:
+      - regex: "(?i)traceback"
+        description: "Python tracebacks"
+      - regex: "(?i)exception"
+        description: "Python exceptions"
+      - regex: "(?i)\bERROR\b"
+        description: "ERROR log level"
+      - regex: "(?i)can't start server"
+        description: "NiceGUI server startup failures"
+      - regex: "(?i)crashed"
+        description: "Crash indicators"
+      - regex: "(?i)failed"
+        description: "Failure indicators"
+
+  podman-hindsight:
+    log_files: []
+    journal_unit: podman-hindsight
+    patterns:
+      - regex: "(?i)failed"
+        description: "Service failure"
+      - regex: "(?i)crashed"
+        description: "Container crash"
+      - regex: "(?i)error"
+        description: "Error messages"
+      - regex: "(?i)oom"
+        description: "OOM kill"
+      - regex: "(?i)segfault"
+        description: "Segfault"
+      - regex: "(?i)health check failed"
+        description: "Health check failure"
+
+# Patterns to ignore (no ticket created)
+ignored:
+  # Dashboard startup warnings — expected on every deploy
+  - regex: "(?i)plugin discovery failed at gateway startup"
+    service: hermes-agent
+    description: "Known harmless: plugin discovery warning on startup"
+
+  # Browser check warnings — expected when no browser is available
+  - regex: "(?i)check_fn.*browser.*returned False"
+    service: hermes-agent
+    description: "Expected: no browser available on headless box"
+
+  # XaelWiki MCP — known to fail intermittently
+  - regex: "(?i)MCP server 'xaelwiki' failed initial connection"
+    service: hermes-agent
+    description: "XaelWiki MCP — known to fail when wiki is unavailable"
+
+# How often to log a heartbeat (seconds)
+heartbeat_interval: 300
