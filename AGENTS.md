@@ -96,6 +96,24 @@ Same pattern for `vendor/hermes-nicegui` (input: `hermes-nicegui-src`) and
 `vendor/xaelWiki` (input: `xaelwiki-src`). An uncommitted submodule edit is
 invisible to the build — this has shipped broken before.
 
+### Automated vendor-deploy script
+
+On the LXC, use `scripts/vendor-deploy` to commit a submodule, update
+flake.lock, validate, and optionally deploy in one command. This is
+recommended over the manual 4-step sequence to avoid forgetting the
+`nix flake lock` step:
+
+```sh
+# Commit and validate only:
+vendor-deploy vendor/hermes-agent "fix: <whatever>" --dry-run
+
+# Commit, validate, AND deploy:
+vendor-deploy vendor/hermes-agent "fix: <whatever>" --deploy
+```
+
+Submodule names: `hermes-agent`, `hermes-nicegui`, `xaelWiki`.
+The script maps these automatically to their flake input names.
+
 ## SSH access & deploy host
 
 `root@hermes.lan` (zerotier — resolves via zerotier DNS) or `root@192.168.193.158` (zerotier IP) both connect to the box's SSH daemon.
@@ -104,6 +122,44 @@ invisible to the build — this has shipped broken before.
 to `root@192.168.193.158`. Override with `HERMES_HOST`.
 
 ## Deploy flows
+
+### On the LXC (self-deploy — the bot's own path)
+
+The bot runs from within the LXC using:
+- `hermes-deploy` (triggers the systemd oneshot unit)
+- OR: `nixos-rebuild --flake /var/lib/hermes-deploy#hermes`
+
+**Critical: before ANY deploy, fix vendor flake.lock if you edited vendor/\*:**
+
+```
+# Step 1: commit vendor submodule, then update flake.lock
+cd vendor/<submodule-name>
+git add -A && git commit -m "fix: <whatever>"
+cd ../..
+nix flake lock --update-input <submodule-name>  # ← THIS IS REQUIRED
+# Step 2: verify the fix
+nix flake check --no-build                       # ← always do this before deploying
+# Step 3: deploy
+hermes-deploy                                    # or: nixos-rebuild --flake /var/lib/hermes-deploy#hermes
+```
+
+If `nix flake check --no-build` fails with a "hash mismatch" error, it means the
+narHash in `flake.lock` no longer matches the content of the vendor submodule.
+The fix is always `nix flake lock --update-input <input>` followed by committing
+the updated `flake.lock`. This is the #1 cause of self-deploy failure.
+
+**Why this works on the LXC despite "read-only root filesystem":**
+NixOS root FS is read-only/immutable (normal for NixOS). `nixos-rebuild switch`
+does NOT write to `/` — it builds to the Nix store (which IS writable), then
+switches the system profile to point to the new generation. The store is a copy-on-wriite hash store, not a writable filesystem. The bot (hermes) is a `trusted-users` in nix.conf and has passwordless sudo, so it can run `nixos-rebuild` and `hermes-deploy` directly.
+
+**What the deployScript does on the LXC:**
+1. `git -C /var/lib/hermes-deploy add -A && commit` (records any uncommitted edits)
+2. `nix flake check --no-build` (fails fast if vendor narHash drift or syntax error)
+3. `nixos-rebuild switch --max-jobs 1 --cores 2 --flake /var/lib/hermes-deploy#hermes`
+4. Health-check (`hermes-agent active` + `hermes doctor`) with grace period
+5. If unhealthy → content-recovery (`hermes-tool revert`) → then generation rollback (one step back)
+6. `sync_repo_to_gen` — resets git + vendor/ submodules to the rolled-back generation's commit
 
 ### From azrael (build machine)
 
@@ -119,34 +175,10 @@ HERMES_HOST=root@hermes.lan scripts/deploy.sh [--dry-run] [--snapshot]
 6. Health-check — hermes-agent active + `hermes doctor` passes
 7. Starts `hermes-rollback.service` watchdog
 
-The build machine is the source of truth — no git repo on the LXC. Bypass
-with `--force-memorygate`. Default host is `root@192.168.193.158` (zerotier),
-override with `HERMES_HOST`.
-
-### From hermes (self-modify)
-
-The bot (hermes) can build, deploy, and roll back itself using the `hermes-deploy`
-systemd unit. This is the "self-managing" path.
-
-```sh
-# On the LXC:
-hermes-deploy            # triggers the hermes-deploy.service
-# or equivalent:
-nixos-rebuild switch --flake /var/lib/hermes-deploy#hermes
-```
-
-The deployScript does:
-1. `git -C /var/lib/hermes-deploy add -A && commit` (records any uncommitted edits)
-2. `git submodule update` (ensures vendor/ submodules match the ledger)
-3. `nixos-rebuild switch --max-jobs 1 --cores 2 --flake "${cfg.repoDir}#${cfg.flakeAttr}"`
-4. Health-check (`hermes-agent active` + `hermes doctor`) with ${cfg.gracePeriod}s grace
-5. If unhealthy → content-recovery (`hermes-tool revert`) → then generation rollback (one step back)
-6. `sync_repo_to_gen` — resets git + vendor/ submodules to the rolled-back generation's commit
-
-The bot is a trusted nix user (`trusted-users = [ "hermes" ]`), so it can
-run `nixos-rebuild` directly. The systemd unit (`hermes-deploy`) is the
-convenient wrapper. Every activation creates a new generation the watchdog
-can roll back.
+The build machine is the source of truth for the git repo history — it runs
+full nixpkgs-based builds and copies the closure via `nix copy`. The LXC also
+has its own git repo for the bot's local commits and can self-deploy directly.
+Default host is `root@192.168.193.158` (zerotier), override with `HERMES_HOST`.
 
 Both paths create `gen-<N>` tags in the git ledger and update
 `/var/lib/hermes-deploy/last-known-good`. The watchdog runs every 15 minutes,
