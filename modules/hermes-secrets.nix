@@ -89,7 +89,9 @@ let
       : > ${file}.tmp
       chmod 0400 ${file}.tmp
       umask 077
-      ${body} >> ${file}.tmp
+      (
+        ${body}
+      ) >> ${file}.tmp
       mv -f ${file}.tmp ${file}
     '';
 
