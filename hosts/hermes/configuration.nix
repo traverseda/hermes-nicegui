@@ -254,6 +254,10 @@
     sshKeyFile = config.age.secrets."xaelwiki-ssh".path;
   };
 
+  # ── Playwright MCP browser automation ──────────────────────────────────
+  # Headless browser MCP server (navigate, click, fill, screenshot) on loopback.
+  services.playwright-mcp.enable = true;
+
   # ── hermes-nicegui web UI ────────────────────────────────────────────
   # Modular NiceGUI browser UI (profile switcher, sessions, cron, kanban,
   # terminal, files). Runs as the hermes user sharing $HERMES_HOME so the CLI

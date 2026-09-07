@@ -108,6 +108,7 @@
         ./modules/xaelwiki.nix
         ./modules/hermes-nicegui.nix
         ./modules/hermes-vnc.nix
+        ./modules/playwright-mcp.nix
       ];
 
       hermes = lib.nixosSystem {
@@ -173,6 +174,9 @@
         };
         nicegui-config-check = import ./tests/nicegui-config-check.nix {
           inherit nixpkgs hermes-agent hermes-nicegui-src;
+        };
+        playwright-mcp-config-check = import ./tests/playwright-mcp-config-check.nix {
+          inherit nixpkgs hermes-agent;
         };
       };
 
