@@ -96,10 +96,11 @@
     "hermes-nicegui-src": {
       "flake": false,
       "locked": {
-        "lastModified": 1786747489,
-        "narHash": "sha256-03eZ2ddvGQwocMxnHTHVxhXf1B0S8KgYKFYuFBbS4/Q=",
-        "rev": "bdacd8ec0204110b379021dbeadd62e90e822a8a",
-        "revCount": 7,
+        "lastModified": 1788739627,
+        "narHash": "sha256-ymoszBbj3aNutAoAjCjx8Qxf1Qtps+JmiPe+C1IAJFw=",
+        "ref": "refs/heads/main",
+        "rev": "f2abcb3f8973f7b155555f4e955d72d257035fbd",
+        "revCount": 43,
         "type": "git",
         "url": "file:./vendor/hermes-nicegui"
       },
