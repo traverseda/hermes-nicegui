@@ -269,6 +269,52 @@ failure modes) and judgment factors. A test deleted to pass a change is an
 automatic reject. Code-lane changes that ship without a matching `flake.lock`
 bump are also auto-rejects.
 
+### NAR hash errors (force-push recovery)
+
+NAR hash errors are the #1 cause of build/deploy failure. They happen when an
+upstream vendor repo (hermes-agent, hermes-nicegui, xaelWiki) is **force-pushed**
+— the commit stays the same but the content changes, so the NAR hash in the
+binary cache or `flake.lock` no longer matches the actual files.
+
+Symptoms include:
+- `error: hash mismatch in newly downloaded content` — binary cache has stale hash
+- `error: path '...' is not valid` — derivation references a NAR that doesn't exist
+- `nix flake check` fails with a hash mismatch on a vendor input
+
+**Fix — try these steps in order:**
+
+```sh
+# Step 1: check which vendor is broken (from error message)
+# e.g. "vendor/hermes-agent" — adjust input name below
+
+cd vendor/hermes-agent
+git fetch origin
+git checkout main        # ensure locally pointing at latest main
+cd ../..
+
+# Step 2: update flake.lock to get the correct NAR hash
+nix flake lock --update-input hermes-agent
+
+# Step 3: verify
+nix flake check --no-build   # should pass now
+```
+
+If `nix flake check --no-build` still fails with a hash mismatch after step 2,
+the binary cache itself has a stale entry. Try:
+
+```sh
+nix flake check --no-build --refresh
+```
+
+The `--refresh` flag tells Nix to re-evaluate the content hash instead of using
+the cached version. This is the nuclear option for binary-cache-side stale hashes —
+it forces Nix to re-derive everything from scratch.
+
+**Prevention:** After force-pushing a vendor repo, always run
+`nix flake lock --update input` and commit the updated `flake.lock` before
+deploying. The deploy scripts run `nix flake check --no-build` as a pre-check
+and will fail fast if the hash drifts.
+
 ### Patching hermes-agent
 
 Local patches ship through a fork. Patch content lives in `patches/` and is
