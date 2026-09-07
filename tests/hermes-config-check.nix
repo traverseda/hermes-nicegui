@@ -175,6 +175,10 @@ pkgs.runCommand "hermes-config-check"
     # the passwordless-sudo grant useless). Safety is the rollback machinery.
     ${need "NoNewPrivileges=false" "agent.unit"}
     ${need "ProtectSystem=false" "agent.unit"}
+    # OnFailure must be in [Unit] section (not [Service]): a misplaced
+    # OnFailure in [Service] is silently ignored by systemd, which broke
+    # recovery entirely (the agent crash would not trigger recovery).
+    ${need "OnFailure=hermes-content-recovery-run.service" "agent.unit"}
     # sudo (setuid wrapper) and system tools must be on the bot's service PATH.
     ${need "/run/wrappers" "agent.unit"}
     test "$agentEnabled" = "true"

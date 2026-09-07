@@ -250,7 +250,7 @@ in
         "hermes-dashboard.service"
         "network-online.target"
       ];
-      onFailure = "hermes-nicegui-restart.service";
+      onFailure = [ "hermes-nicegui-restart.service" ];
 
       environment = {
         HOME = agent.stateDir;

@@ -79,34 +79,26 @@ let
   # Nix generation. Set by modules/hermes-tools.nix; empty = no content lane.
   # Always produces a valid script path (no-op when contentRecovery is empty)
   # so it works as a string in ExecStart even when hermes-tools is disabled.
+  #
+  # The recovery guard is checked INSIDE ExecStart: if no valid rollback target
+  # exists, the script exits 0 immediately — keeping the unit "active (exited)"
+  # and preventing OnFailure escalation. This is necessary because for oneshot
+  # units, ExecStart failure triggers OnFailure (the escalation we want to block).
   contentRecoveryScript = pkgs.writeShellScript "hermes-content-recovery" (
-    lib.optionalString (cfg.contentRecovery != "") cfg.contentRecovery
+    lib.optionalString (cfg.contentRecovery != "") (
+      ''
+        ${recoveryGuardFn}
+        _recovery_guard || true
+      '' + cfg.contentRecovery
+    )
   );
 
-  # Recovery guard: validates that a viable rollback target exists before
-  # allowing the OnFailure chain to proceed. Prevents the chain from burning
-  # the last rollback target on an unrecoverable system.
-  #
-  # Checks (both must pass):
-  #   1. currentGeneration parses to a number ≥ 1 from the nix profile link
-  #   2. last-known-good exists AND is non-empty
-  #
-  # If any check fails: exits 0 with a clear log message. The unit stays
-  # active (RemainAfterExit=true) and does NOT trigger OnFailure escalation.
-  recoveryGuardScript = pkgs.writeShellScript "hermes-recovery-guard" ''
-    local current
-    current=$(readlink /nix/var/nix/profiles/system \
-      | sed -n 's/.*system-\([0-9][0-9]*\)-link$/\1/p')
-    if [ -z "$current" ] || [ "$current" -lt 1 ] 2>/dev/null; then
-      echo "recovery-guard: cannot parse current gen — no valid rollback target" >&2
-      exit 0
-    fi
-    if [ ! -f ${cfg.stateDir}/last-known-good ] || [ ! -s ${cfg.stateDir}/last-known-good ]; then
-      echo "recovery-guard: no last-known-good — recovery skipped" >&2
-      exit 0
-    fi
-    exit 0
-  '';
+  recoveryGuardScript = pkgs.writeShellScript "hermes-recovery-guard" (
+    lib.optionalString (cfg.contentRecovery != "") ''
+      # Guard check already done inside ExecStart of each recovery unit.
+      # This script is kept as a no-op for backwards compatibility.
+    ''
+  );
 
   # Roll back exactly one generation WITHOUT nixos-rebuild. nixos-rebuild's
   # `--rollback` self-locates by building itself from <nixpkgs/nixos>, which
@@ -166,6 +158,31 @@ let
         log "Next deploy will re-package the newer source and re-propose broken config"
         log "This unit MUST exit 1 to prevent permanent Nix-source misalignment"
         exit 1
+      fi
+    }
+  '';
+
+  # Recovery guard function (used inside ExecStart of recovery/rollback units).
+  # Checks (both must pass):
+  #   1. currentGeneration parses to a number ≥ 1 from the nix profile link
+  #   2. last-known-good exists AND is non-empty
+  #
+  # If any check fails: exits 0 immediately (unit stays "active (exited)").
+  # No escalation happens. For oneshot units with RemainAfterExit=true this is
+  # the ONLY safe place to guard: ExecStartPre failure triggers OnFailure,
+  # which is the exact escalation we want to block.
+  recoveryGuardFn = ''
+    _recovery_guard() {
+      local current
+      current=$(readlink /nix/var/nix/profiles/system \
+        | sed -n 's/.*system-\([0-9][0-9]*\)-link$/\1/p')
+      if [ -z "$current" ] || [ "$current" -lt 1 ] 2>/dev/null; then
+        echo "recovery guard: cannot parse current gen — no valid rollback target" >&2
+        exit 0
+      fi
+      if [ ! -f ${cfg.stateDir}/last-known-good ] || [ ! -s ${cfg.stateDir}/last-known-good ]; then
+        echo "recovery guard: no last-known-good — recovery skipped" >&2
+        exit 0
       fi
     }
   '';
@@ -247,7 +264,10 @@ let
   rollbackScript = pkgs.writeShellScript "hermes-rollback-script" ''
     set -uo pipefail
     log() { echo "[hermes-rollback] $*"; }
+    ${recoveryGuardFn}
     ${gitSyncFns}
+
+    _recovery_guard || true
 
     log "rolling back system by one generation"
     # Do NOT use `set -e` here: a single-generation system has nothing to rollback
@@ -493,15 +513,11 @@ in
       path = [ config.system.path ];
       serviceConfig = {
         Type = "oneshot";
-        ExecStartPre = recoveryGuardScript;
         ExecStart = contentRecoveryScript;
         RemainAfterExit = true;
         MemoryMax = cfg.switchMemoryMax;
       };
-      # OnFailure belongs in the [Unit] section, not [Service].
-      # NixOS maps this to the OnFailure= key in [Unit] (not serviceConfig,
-      # which goes in [Service]).
-      onFailure = "hermes-rollback-run.service";
+      onFailure = [ "hermes-rollback-run.service" ];
     };
 
     # The actual rollback run as a oneshot (not a timer or watchdog):
@@ -514,7 +530,6 @@ in
       path = [ config.system.path ];
       serviceConfig = {
         Type = "oneshot";
-        ExecStartPre = recoveryGuardScript;
         ExecStart = rollbackScript;
         MemoryMax = cfg.switchMemoryMax;
       };
@@ -545,9 +560,9 @@ in
     #   empty to prevent a no-op recovery from suppressing escalation.
     # Nicegui always goes to hermes-nicegui-restart (UI crash, no Nix impact).
     systemd.services.hermes-agent.onFailure =
-      lib.mkIf (cfg.contentRecovery == "") (lib.mkForce "hermes-rollback-run.service");
+      lib.mkIf (cfg.contentRecovery == "") (lib.mkForce [ "hermes-rollback-run.service" ]);
     systemd.services.hermes-nicegui.onFailure =
-      (lib.mkForce "hermes-nicegui-restart.service");
+      (lib.mkForce [ "hermes-nicegui-restart.service" ]);
 
     # Keep enough generations that rollback always has somewhere to go.
     # Weekly GC with a 14-day window preserves at least two weeks of

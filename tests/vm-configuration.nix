@@ -32,6 +32,7 @@
   # In the VM there is no real agenix secret, so give hermes an empty env
   # file so the activation script doesn't fail.
   services.hermes-agent.environmentFiles = [ "/var/lib/hermes/empty.env" ];
+  services.hermes-agent.workingDirectory = "/var/lib/hermes/workspace";
   system.activationScripts.hermes-empty-env = lib.stringAfter [ "users" ] ''
     install -o hermes -g hermes -m 0640 /dev/null /var/lib/hermes/empty.env
   '';
