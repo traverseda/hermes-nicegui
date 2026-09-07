@@ -129,7 +129,8 @@ let
       hasUserAll = lib.all (n: lib.hasAttr n userChecks) (lib.attrNames _defaults);
       hindsightEnabled = config ? services.hindsight && config.services.hindsight.enable;
     in
-    if hasUserAll then userChecks
+    if hasUserAll then
+      userChecks
     else
       let
         withHindsight = _defaults // userChecks;
@@ -138,8 +139,8 @@ let
       if hindsightEnabled then withHindsight else withoutHindsight;
 
   # Store path for each check script
-  healthScripts = lib.mapAttrs (name: check:
-    pkgs.writeShellScript "hermes-health-${name}" check.check
+  healthScripts = lib.mapAttrs (
+    name: check: pkgs.writeShellScript "hermes-health-${name}" check.check
   ) healthChecks;
 
   # Bash health check invocations with counter variable.
@@ -186,7 +187,8 @@ let
       ''
         ${recoveryGuardFn}
         _recovery_guard || true
-      '' + cfg.contentRecovery
+      ''
+      + cfg.contentRecovery
     )
   );
 
@@ -220,74 +222,74 @@ let
   # so the startup backstop hook does not re-deliver. Non-fatal: any failure
   # leaves the marker for the hook.
   deliverCallbackScript = pkgs.writeShellScript "hermes-deploy-callback" ''
-    set -uo pipefail
-    CALLBACK_FILE="$1"
-    EXIT_CODE="$2"
-    STATUS_LABEL="$3"
-    GENERATION="$4"
-    PY3="${pkgs.python3}/bin/python3"
+        set -uo pipefail
+        CALLBACK_FILE="$1"
+        EXIT_CODE="$2"
+        STATUS_LABEL="$3"
+        GENERATION="$4"
+        PY3="${pkgs.python3}/bin/python3"
 
-    [ -f "$CALLBACK_FILE" ] || exit 0
-    SESSION_ID=$($PY3 -c 'import json,sys; d=json.load(open(sys.argv[1])); print(d.get("session_id",""))' "$CALLBACK_FILE" 2>/dev/null || true)
-    [ -n "$SESSION_ID" ] || exit 0
+        [ -f "$CALLBACK_FILE" ] || exit 0
+        SESSION_ID=$($PY3 -c 'import json,sys; d=json.load(open(sys.argv[1])); print(d.get("session_id",""))' "$CALLBACK_FILE" 2>/dev/null || true)
+        [ -n "$SESSION_ID" ] || exit 0
 
-    ENV_FILE="${hermesHome}/.env"
-    API_KEY=$(sed -n 's/^API_SERVER_KEY=//p' "$ENV_FILE" 2>/dev/null | head -1)
-    API_PORT=$(sed -n 's/^API_SERVER_PORT=//p' "$ENV_FILE" 2>/dev/null | head -1)
-    API_HOST=$(sed -n 's/^API_SERVER_HOST=//p' "$ENV_FILE" 2>/dev/null | head -1)
-    API_PORT="''${API_PORT:-8443}"
-    API_HOST="''${API_HOST:-127.0.0.1}"
-    [ -n "$API_KEY" ] || { echo "no API_SERVER_KEY - cannot deliver callback"; exit 0; }
+        ENV_FILE="${hermesHome}/.env"
+        API_KEY=$(sed -n 's/^API_SERVER_KEY=//p' "$ENV_FILE" 2>/dev/null | head -1)
+        API_PORT=$(sed -n 's/^API_SERVER_PORT=//p' "$ENV_FILE" 2>/dev/null | head -1)
+        API_HOST=$(sed -n 's/^API_SERVER_HOST=//p' "$ENV_FILE" 2>/dev/null | head -1)
+        API_PORT="''${API_PORT:-8443}"
+        API_HOST="''${API_HOST:-127.0.0.1}"
+        [ -n "$API_KEY" ] || { echo "no API_SERVER_KEY - cannot deliver callback"; exit 0; }
 
-    if [ "$EXIT_CODE" = "0" ]; then
-      MSG="✅ Self-deploy finished successfully (exit 0, generation $GENERATION)."
-    else
-      MSG="❌ Self-deploy failed - rolled back (exit $EXIT_CODE, generation $GENERATION)."
-    fi
+        if [ "$EXIT_CODE" = "0" ]; then
+          MSG="✅ Self-deploy finished successfully (exit 0, generation $GENERATION)."
+        else
+          MSG="❌ Self-deploy failed - rolled back (exit $EXIT_CODE, generation $GENERATION)."
+        fi
 
-    # Wait for the api_server listener (the gateway may have just restarted).
-    deadline=$((SECONDS + 90))
-    until $PY3 -c "import socket,sys; s=socket.create_connection((sys.argv[1], int(sys.argv[2])), 1); s.close()" "$API_HOST" "$API_PORT" 2>/dev/null; do
-      if (( SECONDS >= deadline )); then
-        echo "api_server not reachable - leaving callback marker for startup hook"
-        exit 0
-      fi
-      sleep 2
-    done
+        # Wait for the api_server listener (the gateway may have just restarted).
+        deadline=$((SECONDS + 90))
+        until $PY3 -c "import socket,sys; s=socket.create_connection((sys.argv[1], int(sys.argv[2])), 1); s.close()" "$API_HOST" "$API_PORT" 2>/dev/null; do
+          if (( SECONDS >= deadline )); then
+            echo "api_server not reachable - leaving callback marker for startup hook"
+            exit 0
+          fi
+          sleep 2
+        done
 
-    $PY3 - "$API_HOST" "$API_PORT" "$API_KEY" "$SESSION_ID" "$MSG" <<'PYEOF'
-import json, sys, urllib.request
-host, port, key, sid, msg = sys.argv[1], int(sys.argv[2]), sys.argv[3], sys.argv[4], sys.argv[5]
-url = f"http://{host}:{port}/v1/chat/completions"
-payload = json.dumps({"model": "hermes-agent", "messages": [{"role": "user", "content": msg}], "stream": False}).encode()
-req = urllib.request.Request(url, data=payload, headers={
-    "Authorization": f"Bearer {key}",
-    "X-Hermes-Session-Id": sid,
-    "Content-Type": "application/json",
-})
-try:
-    with urllib.request.urlopen(req, timeout=600) as resp:
-        resp.read()
-    print("deploy callback delivered to session", sid)
-except Exception as e:
-    print("deploy callback delivery failed:", e, file=sys.stderr)
-    sys.exit(0)
-PYEOF
-    # Mark delivered so a later startup hook does not re-deliver.
-    $PY3 - "$CALLBACK_FILE" "$EXIT_CODE" "$STATUS_LABEL" "$GENERATION" <<'PYEOF'
-import json, sys
-path, code, status, gen = sys.argv[1], sys.argv[2], sys.argv[3], sys.argv[4]
-try:
-    d = json.load(open(path))
-except Exception:
-    d = {}
-d["exit_code"] = int(code)
-d["status"] = status
-d["generation"] = gen
-d["delivered"] = True
-d["delivered_at"] = __import__("datetime").datetime.now().isoformat()
-json.dump(d, open(path, "w"))
-PYEOF
+        $PY3 - "$API_HOST" "$API_PORT" "$API_KEY" "$SESSION_ID" "$MSG" <<'PYEOF'
+    import json, sys, urllib.request
+    host, port, key, sid, msg = sys.argv[1], int(sys.argv[2]), sys.argv[3], sys.argv[4], sys.argv[5]
+    url = f"http://{host}:{port}/v1/chat/completions"
+    payload = json.dumps({"model": "hermes-agent", "messages": [{"role": "user", "content": msg}], "stream": False}).encode()
+    req = urllib.request.Request(url, data=payload, headers={
+        "Authorization": f"Bearer {key}",
+        "X-Hermes-Session-Id": sid,
+        "Content-Type": "application/json",
+    })
+    try:
+        with urllib.request.urlopen(req, timeout=600) as resp:
+            resp.read()
+        print("deploy callback delivered to session", sid)
+    except Exception as e:
+        print("deploy callback delivery failed:", e, file=sys.stderr)
+        sys.exit(0)
+    PYEOF
+        # Mark delivered so a later startup hook does not re-deliver.
+        $PY3 - "$CALLBACK_FILE" "$EXIT_CODE" "$STATUS_LABEL" "$GENERATION" <<'PYEOF'
+    import json, sys
+    path, code, status, gen = sys.argv[1], sys.argv[2], sys.argv[3], sys.argv[4]
+    try:
+        d = json.load(open(path))
+    except Exception:
+        d = {}
+    d["exit_code"] = int(code)
+    d["status"] = status
+    d["generation"] = gen
+    d["delivered"] = True
+    d["delivered_at"] = __import__("datetime").datetime.now().isoformat()
+    json.dump(d, open(path, "w"))
+    PYEOF
   '';
 
   # Bash function the deployScript calls at every terminal verdict.
@@ -665,19 +667,21 @@ in
     # by adding an entry. No timers - health is only polled at deploy
     # time.
     health.checks = lib.mkOption {
-      type = lib.types.attrsOf (lib.types.submodule {
-        options = {
-          what = lib.mkOption {
-            type = lib.types.str;
-            description = "Human-readable check description.";
+      type = lib.types.attrsOf (
+        lib.types.submodule {
+          options = {
+            what = lib.mkOption {
+              type = lib.types.str;
+              description = "Human-readable check description.";
+            };
+            check = lib.mkOption {
+              type = lib.types.str;
+              description = "Bash command; exit 0 = healthy.";
+            };
           };
-          check = lib.mkOption {
-            type = lib.types.str;
-            description = "Bash command; exit 0 = healthy.";
-          };
-        };
-      });
-      default = {};
+        }
+      );
+      default = { };
       description = ''
         Health check registry: attrs of
         {what, check}. Each entry generates a oneshot systemd unit
@@ -755,7 +759,9 @@ in
           directory = ${cfg.repoDir}/vendor/hermes-agent
           directory = ${cfg.repoDir}/vendor/hermes-nicegui
           directory = ${cfg.repoDir}/vendor/xaelWiki
-          ${lib.optionalString (config ? services.hermes-tools) "directory = ${config.services.hermes-tools.contentDir}"}
+          ${lib.optionalString (
+            config ? services.hermes-tools
+          ) "directory = ${config.services.hermes-tools.contentDir}"}
       '';
     };
 
@@ -813,27 +819,12 @@ in
 
     # All systemd services in one merged definition: dynamically-generated
     # health check units + core deploy/rollback/onFailure units.
-    systemd.services = let
-      healthService = name: check: {
-        "${"hermes-health-${name}"}" = {
-          description = "health check: ${check.what}";
-          wantedBy = [];
-          path = [ config.system.path ];
-          serviceConfig = {
-            Type = "oneshot";
-            RemainAfterExit = true;
-            ExecStart = "${pkgs.bash}/bin/bash ${healthScripts.${name}}";
-            MemoryMax = cfg.switchMemoryMax;
-          };
-        };
-        "_unused" = { }; # placeholder for lib.mapAttrs return
-      };
-      defaultHealthUnits = builtins.listToAttrs (
-        lib.mapAttrsToList (name: check: {
-          name = "hermes-health-${name}";
-          value = {
+    systemd.services =
+      let
+        healthService = name: check: {
+          "${"hermes-health-${name}"}" = {
             description = "health check: ${check.what}";
-            wantedBy = [];
+            wantedBy = [ ];
             path = [ config.system.path ];
             serviceConfig = {
               Type = "oneshot";
@@ -842,65 +833,83 @@ in
               MemoryMax = cfg.switchMemoryMax;
             };
           };
-        }) healthChecks
-      );
-      coreUnits = {
-        hermes-deploy.description = "Deploy Hermes from git and health-check (with auto-rollback)";
-        hermes-deploy.wantedBy = [];
-        hermes-deploy.path = [ config.system.path ];
-        hermes-deploy.serviceConfig = {
-          Type = "oneshot";
-          # Fork into new session -> detached from systemd -> survives
-          # activation cycle that would otherwise kill this unit mid-execution.
-          # ">/dev/null 2>&1 < /dev/null" closes fds so the detached process
-          # doesn't hold onto the old generation's ptmx/sockets.
-          ExecStart = "${pkgs.coreutils}/bin/setsid ${deployScript} >/dev/null 2>&1 < /dev/null";
-          TimeoutStartSec = 0;
-          MemoryMax = cfg.switchMemoryMax;
+          "_unused" = { }; # placeholder for lib.mapAttrs return
         };
-        hermes-rollback.description = "Roll back Hermes to the previous git/system generation";
-        hermes-rollback.wantedBy = [];
-        hermes-rollback.path = [ config.system.path ];
-        hermes-rollback.serviceConfig = {
-          Type = "oneshot";
-          ExecStart = "${pkgs.coreutils}/bin/setsid ${rollbackScript} >/dev/null 2>&1 < /dev/null";
-          TimeoutStartSec = 0;
-          MemoryMax = cfg.switchMemoryMax;
+        defaultHealthUnits = builtins.listToAttrs (
+          lib.mapAttrsToList (name: check: {
+            name = "hermes-health-${name}";
+            value = {
+              description = "health check: ${check.what}";
+              wantedBy = [ ];
+              path = [ config.system.path ];
+              serviceConfig = {
+                Type = "oneshot";
+                RemainAfterExit = true;
+                ExecStart = "${pkgs.bash}/bin/bash ${healthScripts.${name}}";
+                MemoryMax = cfg.switchMemoryMax;
+              };
+            };
+          }) healthChecks
+        );
+        coreUnits = {
+          hermes-deploy.description = "Deploy Hermes from git and health-check (with auto-rollback)";
+          hermes-deploy.wantedBy = [ ];
+          hermes-deploy.path = [ config.system.path ];
+          hermes-deploy.serviceConfig = {
+            Type = "oneshot";
+            # Fork into new session -> detached from systemd -> survives
+            # activation cycle that would otherwise kill this unit mid-execution.
+            # ">/dev/null 2>&1 < /dev/null" closes fds so the detached process
+            # doesn't hold onto the old generation's ptmx/sockets.
+            ExecStart = "${pkgs.coreutils}/bin/setsid ${deployScript} >/dev/null 2>&1 < /dev/null";
+            TimeoutStartSec = 0;
+            MemoryMax = cfg.switchMemoryMax;
+          };
+          hermes-rollback.description = "Roll back Hermes to the previous git/system generation";
+          hermes-rollback.wantedBy = [ ];
+          hermes-rollback.path = [ config.system.path ];
+          hermes-rollback.serviceConfig = {
+            Type = "oneshot";
+            ExecStart = "${pkgs.coreutils}/bin/setsid ${rollbackScript} >/dev/null 2>&1 < /dev/null";
+            TimeoutStartSec = 0;
+            MemoryMax = cfg.switchMemoryMax;
+          };
+          "hermes-content-recovery-run".description =
+            "Content-lane recovery (runs when hermes-agent/nicegui crashes)";
+          "hermes-content-recovery-run".wantedBy = [ ];
+          "hermes-content-recovery-run".path = [ config.system.path ];
+          "hermes-content-recovery-run".serviceConfig = {
+            Type = "oneshot";
+            ExecStart = contentRecoveryScript;
+            RemainAfterExit = true;
+            MemoryMax = cfg.switchMemoryMax;
+          };
+          "hermes-content-recovery-run".onFailure = [ "hermes-rollback-run.service" ];
+          "hermes-rollback-run".description = "Nix generation rollback (runs when content recovery fails)";
+          "hermes-rollback-run".wantedBy = [ ];
+          "hermes-rollback-run".path = [ config.system.path ];
+          "hermes-rollback-run".serviceConfig = {
+            Type = "oneshot";
+            ExecStart = rollbackScript;
+            MemoryMax = cfg.switchMemoryMax;
+          };
+          "hermes-nicegui-restart".description =
+            "Simple restart for hermes-nicegui crashes (no Nix rollback)";
+          "hermes-nicegui-restart".wantedBy = [ ];
+          "hermes-nicegui-restart".path = [ config.system.path ];
+          "hermes-nicegui-restart".serviceConfig = {
+            Type = "oneshot";
+            ExecStart = pkgs.writeShellScript "hermes-nicegui-restart-script" ''
+              systemctl restart hermes-nicegui
+            '';
+          };
+          "hermes-agent".onFailure = lib.mkIf (cfg.contentRecovery == "") (
+            lib.mkForce [ "hermes-rollback-run.service" ]
+          );
+          "hermes-nicegui".onFailure = (lib.mkForce [ "hermes-nicegui-restart.service" ]);
         };
-        "hermes-content-recovery-run".description = "Content-lane recovery (runs when hermes-agent/nicegui crashes)";
-        "hermes-content-recovery-run".wantedBy = [];
-        "hermes-content-recovery-run".path = [ config.system.path ];
-        "hermes-content-recovery-run".serviceConfig = {
-          Type = "oneshot";
-          ExecStart = contentRecoveryScript;
-          RemainAfterExit = true;
-          MemoryMax = cfg.switchMemoryMax;
-        };
-        "hermes-content-recovery-run".onFailure = [ "hermes-rollback-run.service" ];
-        "hermes-rollback-run".description = "Nix generation rollback (runs when content recovery fails)";
-        "hermes-rollback-run".wantedBy = [];
-        "hermes-rollback-run".path = [ config.system.path ];
-        "hermes-rollback-run".serviceConfig = {
-          Type = "oneshot";
-          ExecStart = rollbackScript;
-          MemoryMax = cfg.switchMemoryMax;
-        };
-        "hermes-nicegui-restart".description = "Simple restart for hermes-nicegui crashes (no Nix rollback)";
-        "hermes-nicegui-restart".wantedBy = [];
-        "hermes-nicegui-restart".path = [ config.system.path ];
-        "hermes-nicegui-restart".serviceConfig = {
-          Type = "oneshot";
-          ExecStart = pkgs.writeShellScript "hermes-nicegui-restart-script" ''
-            systemctl restart hermes-nicegui
-          '';
-        };
-        "hermes-agent".onFailure =
-          lib.mkIf (cfg.contentRecovery == "") (lib.mkForce [ "hermes-rollback-run.service" ]);
-        "hermes-nicegui".onFailure =
-          (lib.mkForce [ "hermes-nicegui-restart.service" ]);
-      };
-    in
-    defaultHealthUnits // coreUnits;
+      in
+      defaultHealthUnits // coreUnits;
 
     # Keep enough generations that rollback always has somewhere to go.
     # Weekly GC with a 14-day window preserves at least two weeks of
@@ -927,36 +936,36 @@ in
         # it hands its own id so the deploy can report back into that session
         # (via ${callbackFile}). No args = plain operator deploys, unchanged.
         (pkgs.writeShellScriptBin "hermes-deploy" ''
-          CALLBACK=""
-          while [ $# -gt 0 ]; do
-            case "$1" in
-              --callback)
-                CALLBACK="$2"; shift 2 ;;
-              --callback=*)
-                CALLBACK="''${1#--callback=}"; shift ;;
-              *)
-                echo "unknown option $1" >&2; exit 1 ;;
-            esac
-          done
-          if [ -n "$CALLBACK" ]; then
-            CALLBACK_FILE=${callbackFile}
-            mkdir -p "$(dirname "$CALLBACK_FILE")"
-            "${pkgs.python3}/bin/python3" - "$CALLBACK_FILE" "$CALLBACK" <<'PYEOF'
-import json, os, sys
-path, sid = sys.argv[1], sys.argv[2]
-d = {
-    "session_id": sid,
-    "session_key": os.environ.get("HERMES_SESSION_KEY", ""),
-    "platform": os.environ.get("HERMES_SESSION_PLATFORM", "") or os.environ.get("HERMES_SESSION_SOURCE", ""),
-    "source": os.environ.get("HERMES_SESSION_SOURCE", ""),
-    "requested_at": __import__("datetime").datetime.now().isoformat(),
-}
-json.dump(d, open(path, "w"))
-PYEOF
-            chmod 0644 "$CALLBACK_FILE"
-            chown ${config.services.hermes-agent.user}:${config.services.hermes-agent.group} "$CALLBACK_FILE" 2>/dev/null || true
-          fi
-          exec systemctl start hermes-deploy.service
+                    CALLBACK=""
+                    while [ $# -gt 0 ]; do
+                      case "$1" in
+                        --callback)
+                          CALLBACK="$2"; shift 2 ;;
+                        --callback=*)
+                          CALLBACK="''${1#--callback=}"; shift ;;
+                        *)
+                          echo "unknown option $1" >&2; exit 1 ;;
+                      esac
+                    done
+                    if [ -n "$CALLBACK" ]; then
+                      CALLBACK_FILE=${callbackFile}
+                      mkdir -p "$(dirname "$CALLBACK_FILE")"
+                      "${pkgs.python3}/bin/python3" - "$CALLBACK_FILE" "$CALLBACK" <<'PYEOF'
+          import json, os, sys
+          path, sid = sys.argv[1], sys.argv[2]
+          d = {
+              "session_id": sid,
+              "session_key": os.environ.get("HERMES_SESSION_KEY", ""),
+              "platform": os.environ.get("HERMES_SESSION_PLATFORM", "") or os.environ.get("HERMES_SESSION_SOURCE", ""),
+              "source": os.environ.get("HERMES_SESSION_SOURCE", ""),
+              "requested_at": __import__("datetime").datetime.now().isoformat(),
+          }
+          json.dump(d, open(path, "w"))
+          PYEOF
+                      chmod 0644 "$CALLBACK_FILE"
+                      chown ${config.services.hermes-agent.user}:${config.services.hermes-agent.group} "$CALLBACK_FILE" 2>/dev/null || true
+                    fi
+                    exec systemctl start hermes-deploy.service
         '')
         (pkgs.writeShellScriptBin "hermes-rollback" ''
           exec systemctl start hermes-rollback.service

@@ -113,6 +113,7 @@
         { nixpkgs.overlays = packageOverlays; }
         hermes-agent.nixosModules.default
         agenix.nixosModules.age
+        ./modules/hermes-secrets.nix
         ./modules/hermes-service.nix
         ./modules/hermes-skills.nix
         ./modules/hermes-deploy.nix

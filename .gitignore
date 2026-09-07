@@ -24,3 +24,6 @@ secrets/lxc-host-ed25519
 # Python bytecode from local smoke runs
 __pycache__/
 *.pyc
+
+# LXC host private key — never commit (gitignored in secrets/ too).
+lxc-host-ed25519

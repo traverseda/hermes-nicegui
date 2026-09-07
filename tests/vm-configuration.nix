@@ -20,9 +20,9 @@
 
   # Test model: point at a fake provider; no real keys needed.
   hermesDeploy.providers.mock = {
-    name    = "mock";
-    provider= "openrouter";
-    model   = "openrouter/mock-test";
+    name = "mock";
+    provider = "openrouter";
+    model = "openrouter/mock-test";
     baseUrl = "https://openrouter.ai/api/v1";
   };
   hermesDeploy.defaultProvider = "mock";

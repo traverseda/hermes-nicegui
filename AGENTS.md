@@ -187,10 +187,24 @@ checking the agent, and only rolls back past the last-known-good generation
 
 ## Secrets
 
-agenix `.age` files in `secrets/`. Edit/rotate via `nix develop` then
-`agenix -e secrets/<name>.age`. Recipients: your local SSH pubkey + the
-LXC's pre-generated host key (`secrets/lxc-host-ed25519.pub`). The private key
-is gitignored and must be uploaded to the LXC during initial provisioning.
+One encrypted `.age` file **per secret** in `secrets/` (see `secrets/manifest`
+for the registry + consumers). `modules/hermes-secrets.nix` generates an
+`age.secrets."<NAME>"` entry per manifest line (→ `/run/agenix/<NAME>` at
+activation) and builds one env file per consumer from the manifest
+(`/run/agenix/hermes.env`, `/run/agenix/hindsight.env`, …) — services point
+directly at those paths; no secret touches the Nix store. Edit/rotate via
+
+```sh
+nix develop
+hermes-secrets edit <NAME>        # decrypt → $EDITOR → re-encrypt → validate
+hermes-secrets check              # deploy gate (also wired into hermes-deploy)
+```
+
+`hermes-deploy` runs `hermes-secrets check` before every switch and aborts on
+a missing/undecryptable/empty required secret. Recipients: the operator's SSH
+pubkey (`secrets/operator-pubkey.pub`) + the LXC host key
+(`secrets/lxc-host-ed25519.pub`). The private key is gitignored and must be
+uploaded to the LXC during initial provisioning.
 
 ## Content-lane workflow
 

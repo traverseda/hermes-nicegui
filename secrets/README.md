@@ -1,76 +1,55 @@
 # Secrets
 
 Secrets are encrypted with [agenix](https://github.com/ryantm/agenix) and
-committed to the repo as `.age` files. They are decrypted on the target host
-at activation time into `/run/agenix/...` — never into `/nix/store` (which is
-world-readable) and never into this repo in plaintext.
+committed to the repo as `.age` files — **one file per secret**. They are
+decrypted on the target host at activation time into `/run/agenix/<NAME>` —
+never into `/nix/store` (world-readable) and never into this repo in
+plaintext.
 
-## Unified `config.age`
-
-The bulk of secrets are merged into a single `secrets/config.age` file. This
-contains all LLM/API keys, dashboard authentication, API server keys, and other
-shared secrets — decrypted to `/run/agenix/config`. A single `agenix -e
-secrets/config.age` edits everything at once. To rotate a specific key, edit its
-line in the decrypted file and re-encrypt.
-
-**Contents of `config.age` (decrypted `/run/agenix/config`):**
+## Layout
 
 ```
-LLM_API_KEY=<key for the preferred model endpoint (vLLM, opencode-go)>
-HINDSIGHT_API_LLM_API_KEY=<key for the preferred model endpoint (opencode-go)>
-HINDSIGHT_API_TENANT_API_KEY=<shared key clients send as `Authorization: Bearer`>
-HINDSIGHT_CP_ACCESS_KEY=<optional; control-plane login, only if the dashboard is enabled>
-HINDSIGHT_CP_DATAPLANE_API_KEY=<same value as HINDSIGHT_API_TENANT_API_KEY>
-HINDSIGHT_API_KEY=<same value as HINDSIGHT_API_TENANT_API_KEY, sent by hermes-agent memory provider>
-OPENCODE_API_KEY=<opencode-go API key>
-TAVILY_API_KEY=<tavily API key>
-OPENROUTER_API_KEY=<openrouter API key>
-AGENTMAIL_API_KEY=<agentmail API key>
-TAILSCALE_CLIENT_ID=<tailscale OAuth client id>
-TAILSCALE_CLIENT_SECRET=<tailscale OAuth client secret>
-OPENCODE_GO_API_KEY=<opencode-go API key>
-DISCORD_BOT_TOKEN=<discord bot token>
-DISCORD_ALLOWED_USERS=<comma-separated discord user ids>
-DISCORD_HOME_CHANNEL=<discord channel id>
-HASS_URL=https://hearth.0u0.ca/
-HASS_TOKEN=<Home Assistant long-lived access token>
-API_SERVER_KEY=<key for the multiplexed api_server>
-HERMES_DASHBOARD_BASIC_AUTH_USERNAME=admin
-HERMES_DASHBOARD_BASIC_AUTH_PASSWORD_HASH=scrypt$16384$8$1$<salt_b64>$<dk_b64>
-HERMES_DASHBOARD_BASIC_AUTH_SECRET=<32+ random bytes, base64>
-XAEL_AUTH_TOKEN=<random token, min 16 chars>
-HERMES_KANBAN_USERNAME=admin
-HERMES_KANBAN_PASSWORD=<plaintext password for dashboard login>
-HERMES_API_TOKEN=<bearer token for nicegui → gateway api_server calls>
+secrets/
+  manifest               plaintext registry (name → consumers, required, placeholder, purpose)
+  operator-pubkey.pub    recipient 1: operator (build machine / azrael)
+  lxc-host-ed25519.pub   recipient 2: the LXC host key (ll ages decrypt at activation)
+  <NAME>.age             one encrypted file per secret (value only, no "NAME=" prefix)
+  tailscale-auth.age     standalone: tailscale auth key (file-backed, not in manifest)
+  cloudflare-tunnel.age  standalone: CF tunnel token (file-backed)
+  xaelwiki-ssh.age       standalone: xaelwiki SSH deploy key (file-backed)
 ```
 
-`HERMES_API_TOKEN` must equal `API_SERVER_KEY` (it is the same key, stored
-under two names for different consumers). The nicegui kanban plugin uses
-`HERMES_KANBAN_USERNAME/KANBAN_PASSWORD` (plaintext) to cookie-login into the
-dashboard; the dashboard itself uses the scrypt hash from
-`HERMES_DASHBOARD_BASIC_AUTH_PASSWORD_HASH`. Keep the two in sync.
+## The manifest is the contract
 
-To edit `config.age`:
+`secrets/manifest` is a TAB-separated table — the single source of truth for
+which secrets exist and who consumes them:
 
-```sh
-nix develop
-agenix -e secrets/config.age        # edit all merged secrets
-agenix --rekey -e secrets/config.age # re-encrypt with updated recipients
+```
+NAME<TAB>consumers<TAB>required<TAB>placeholder<TAB>purpose
 ```
 
-To rotate a specific key, edit its line in the decrypted editor, verify the
-format matches the comments below, then save & exit agenix.
+- **consumers** — comma-separated env-file groups that need this secret:
+  `hermes` (default profile `.env`; gateway + dashboard + ha profile +
+  opencode children), `hindsight` (container), `nicegui` (web UI unit),
+  `xaelwiki` (notes MCP server).
+- **required=1** — `hermes-secrets check` (the deploy gate) FAILS if the
+  file is missing, undecryptable, or empty.
+- **placeholder** — if the decrypted value equals this literal, the gate
+  prints a loud warning (not a failure — a placeholder is operator rotation
+  backlog, not an accidental drop). Left blank = no placeholder allowed.
+- **purpose** — human description of what the secret is for.
 
-## Standalone secrets (operator-provisioned)
+`modules/hermes-secrets.nix` reads the manifest at eval time and generates:
 
-These secrets are NOT merged into `config.age` because they are minted
-externally (by operators, not derived from the config merge):
+1. one `age.secrets."<NAME>"` entry per line → `/run/agenix/<NAME>`;
+2. a per-consumer aggregate env file, `/run/agenix/<consumer>.env`,
+   containing only that consumer's `KEY=value` lines (assembled AFTER agenix
+   decrypts, BEFORE `hermes-agent-setup` builds `$HERMES_HOME/.env`).
 
-| File                     | Decrypts to             | Used by                             |
-| ------------------------ | ----------------------- | ----------------------------------- |
-| `tailscale-auth.age`     | `/run/agenix/tailscale-auth` | `services.tailscale.authKeyFile` |
-| `cloudflare-tunnel.age`  | `/run/agenix/cloudflare-tunnel` | Cloudflare Tunnel connector token |
-| `xaelwiki-ssh.age`       | `/run/agenix/xaelwiki-ssh` | SSH deploy key for the notes vault |
+Service modules point at the aggregates, e.g.
+`services.hermes-agent.environmentFiles = [ "/run/agenix/hermes.env" ]`.
+The ha profile, dashboard, and opencode children get the hermes aggregate
+because they read `$HERMES_HOME/.env` directly.
 
 ## Recipients
 
@@ -78,7 +57,7 @@ Every `.age` file is encrypted to **two** recipients:
 
 | Recipient | Key file | Why |
 | --------- | -------- | --- |
-| Operator   | `secrets/operator-pubkey.pub` | lets you `agenix -e` / decrypt on the build machine |
+| Operator   | `secrets/operator-pubkey.pub` | lets you `hermes-secrets edit` / decrypt on the build machine |
 | The LXC    | `secrets/lxc-host-ed25519.pub` | decrypts at activation on the host |
 
 The operator pubkey is pulled from `root@hermes.lan` at first deploy:
@@ -90,13 +69,67 @@ ssh root@hermes.lan "grep ssh-ed25519 /root/.ssh/authorized_keys" \
 
 `secrets/lxc-host-ed25519` (private, gitignored) is a pre-generated SSH host
 keypair for the LXC. **It must be uploaded to the LXC as its SSH host key
-during initial creation** (see below) — otherwise agenix can't decrypt.
+during initial creation** (see Setup) — otherwise agenix can't decrypt.
 
 > **Important:** recipients are the **raw SSH public keys** (`ssh-ed25519 AAAA…`),
 > *not* the `age1…` strings from `ssh-to-age`. With age ≥1.3 an `ssh-to-age`
 > (X25519) recipient cannot be decrypted using an SSH private-key identity,
 > which is exactly what agenix uses on the host. This was verified empirically;
 > encrypt with `age -e -r "$(cat key.pub)"` or `age -R key.pub`.
+
+## The hermes-secrets CLI
+
+Ships to the box with the flake (and runs from the repo on the build
+machine). Needs `age` on PATH — use `nix develop` on azrael.
+
+```sh
+hermes-secrets list                 # name<TAB>consumers<TAB>status
+hermes-secrets doctor               # full status table + alias checks
+hermes-secrets check                # deploy gate: FAIL on missing/unreadable/empty
+hermes-secrets edit <NAME>          # decrypt to $EDITOR, re-encrypt to both recipients
+```
+
+- `check` is wired into `hermes-deploy` as a **pre-switch gate** (run after
+  `nix flake check --no-build`, aborts the deploy on failure). Identity
+  resolution: `--identity > $HERMES_SECRETS_IDENTITY > /etc/ssh/ssh_host_ed25519_key`
+  (chosen only when `/run/agenix` exists — i.e. on the LXC) `> ~/.ssh/id_ed25519`.
+- `doctor` also verifies read-only **alias invariants** (documented below).
+
+```sh
+# Edit one secret:
+nix develop
+hermes-secrets edit LLM_API_KEY       # decrypt → $EDITOR → re-encrypt → validate
+```
+
+## Editing / rotating a secret
+
+```sh
+nix develop
+hermes-secrets edit <NAME>
+git add secrets/<NAME>.age
+git commit -m "secrets: rotate <NAME>"
+# deploy; the gate runs hermes-secrets check before switching
+```
+
+To add a NEW secret:
+1. encrypt it to both recipients (see Migration below for the exact incantation),
+2. add a row to `secrets/manifest`,
+3. commit both and deploy.
+
+## Migration from the old unified config.age
+
+If you are still on the old single-blob layout: decrypt `config.age`, split
+per key, and re-encrypt one file per secret. The helper in this repo does
+exactly that:
+
+```sh
+bash scripts/migrate-secrets.sh \
+  --source secrets/config.age --identity ~/.ssh/id_ed25519 \
+  --values <(printf '%s\n' 'NEW_SECRET=value')
+```
+
+then `git rm secrets/config.age` and add the manifest row. The helper
+refuses to invent values for keys missing from the source.
 
 ## Setup
 
@@ -114,48 +147,53 @@ during initial creation** (see below) — otherwise agenix can't decrypt.
 
    agenix on the host uses this key by default (`/etc/ssh/ssh_host_ed25519_key`).
 
-2. Editing secrets (dev shell):
+2. Encrypting a secret to both recipients (one-liner, age from `nix develop`):
 
    ```sh
-   nix develop
-   agenix -e secrets/config.age           # edit unified config (all secrets)
-   agenix -e secrets/tailscale-auth.age   # edit tailscale auth key (standalone)
-   agenix -e secrets/cloudflare-tunnel.age # edit CF tunnel token (standalone)
-   agenix -e secrets/xaelwiki-ssh.age     # edit xaelwiki SSH key (standalone)
+   OP=$(awk '/^ssh-ed25519/{print $0}' secrets/operator-pubkey.pub)
+   LX=$(awk '/^ssh-ed25519/{print $0}' secrets/lxc-host-ed25519.pub)
+   printf '%s' 'the-value' | age -e -r "$OP" -r "$LX" -o secrets/<NAME>.age
    ```
 
-   agenix decrypts with your local identity and re-encrypts to the recipients
-   in `secrets/secrets.nix`. If you don't use a `secrets.nix`, re-encrypt
-   manually with `age -e -r "$(cat ~/.ssh/id_ed25519.pub)" -r "$(cat secrets/lxc-host-ed25519.pub)"`.
+3. Commit the `.age` files. Deploy; agenix decrypts them at activation into
+   `/run/agenix/<NAME>` and the hermes-secrets activator assembles the
+   per-consumer env files.
 
-3. Commit the `.age` files. Deploy; the LXC decrypts them on activation.
+## Alias invariants (must stay equal)
 
-## Rotating / rekeying
+| Keys | Constraint |
+| ---- | ---------- |
+| `API_SERVER_KEY` == `HERMES_API_TOKEN` | the nicegui kanban plugin authenticates to the gateway with the listener key |
+| `HINDSIGHT_API_TENANT_API_KEY` == `HINDSIGHT_API_KEY` == `HINDSIGHT_API_TOKEN` == `HINDSIGHT_CP_DATAPLANE_API_KEY` | same tenant token across data-plane clients, hermes memory provider, opencode plugin, and CP dataplane proxy |
+| `HINDSIGHT_API_LLM_API_KEY` == `LLM_API_KEY` | one vLLM key for the gateway and Hindsight's extraction/retrieval calls |
+| `OPENCODE_API_KEY` == `LLM_API_KEY` | opencode children use the same model key |
 
-```sh
-nix develop
-agenix --rekey -e secrets/config.age
-```
+`hermes-secrets doctor` checks these.
 
 ## Per-key rotation guides
 
 ### Discords tokens
-Edit `DISCORD_BOT_TOKEN`, `DISCORD_ALLOWED_USERS`, `DISCORD_HOME_CHANNEL` in
-`config.age`. Mint a new token in the Discord Developer Portal, replace the
-value.
+Edit `DISCORD_BOT_TOKEN`, `DISCORD_ALLOWED_USERS`, `DISCORD_HOME_CHANNEL`.
+Mint a new token in the Discord Developer Portal, replace `DISCORD_BOT_TOKEN`
+with `hermes-secrets edit DISCORD_BOT_TOKEN`.
 
 ### Home Assistant token
-Edit `HASS_TOKEN` in `config.age`. Mint a new token at Home Assistant →
-Profile → Security → Long-lived access tokens.
+Replace `HASS_TOKEN`. Mint a new token at Home Assistant → Profile →
+Security → Long-lived access tokens.
 
 ### API_SERVER_KEY
-Edit `API_SERVER_KEY` in `config.age`. Must be ≥ 16 characters. Also update the
-`HERMES_API_TOKEN` line to the same value (they must match).
+Replace `API_SERVER_KEY` (≥ 16 chars) AND `HERMES_API_TOKEN` with the same
+value (they must match — see aliases above).
 
 ### Dashboard password
-Edit `HERMES_DASHBOARD_BASIC_AUTH_PASSWORD_HASH` and optionally the
+Replace `HERMES_DASHBOARD_BASIC_AUTH_PASSWORD_HASH` and optionally
 `HERMES_DASHBOARD_BASIC_AUTH_SECRET`. Generate a fresh hash (the scrypt
-format is documented in the file itself).
+format is documented in the old config.age contents: `scrypt$…`). If you also
+rotate the password the kanban plugin uses, update `HERMES_KANBAN_PASSWORD`
+to match.
+
+### Hindsight control-plane login
+Rotate `HINDSIGHT_CP_ACCESS_KEY`.
 
 ### XAEL_AUTH_TOKEN
-Edit `XAEL_AUTH_TOKEN` in `config.age`. Must be ≥ 16 random characters.
+Replace `XAEL_AUTH_TOKEN` (≥ 16 random characters).

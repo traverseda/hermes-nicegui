@@ -59,12 +59,12 @@ let
   agentCfg = config.services.hermes-agent;
   cfg = config.services.hermes-tools;
 
-  contentDir         = cfg.contentDir;
-  hermesHome         = "${agentCfg.stateDir}/.hermes";
-  goodTag            = "content-good";
+  contentDir = cfg.contentDir;
+  hermesHome = "${agentCfg.stateDir}/.hermes";
+  goodTag = "content-good";
   # Defaults for vendor-deploy; override via hermes-deploy config.
-  repoDir            = config.services.hermes-deploy.repoDir    or "/var/lib/hermes-deploy";
-  flakeAttr          = config.services.hermes-deploy.flakeAttr  or "hermes";
+  repoDir = config.services.hermes-deploy.repoDir or "/var/lib/hermes-deploy";
+  flakeAttr = config.services.hermes-deploy.flakeAttr or "hermes";
 
   # hermes-tool: a store binary built from scripts/hermes-tool.sh with the
   # concrete paths substituted in. This is the recovery floor — it must exist
@@ -81,13 +81,13 @@ let
   # vendor-deploy: convenience script that wraps the vendor commit + flake lock
   # sequence into a single command so the bot never forgets the nix flake lock
   # step. Installed alongside hermes-tool on PATH.
-  # Uses replaceVars for repoDir/flakeAttr substitution, same pattern as
-  # hermes-tool.
-  vendorDeployPackage = pkgs.writeShellScriptBin "vendor-deploy" (
-    pkgs.replaceVars ./../scripts/vendor-deploy {
-      inherit repoDir flakeAttr;
-    }
-  );
+  # The script reads REPO_DIR/FLAKE_ATTR from env at runtime (defaults in the
+  # script) — no ${@placeholders@} need substituting, so ship it as-is.
+  vendorDeployPackage = pkgs.runCommand "vendor-deploy" { } ''
+    mkdir -p $out/bin
+    cp ${./../scripts/vendor-deploy} $out/bin/vendor-deploy
+    chmod +x $out/bin/vendor-deploy
+  '';
 
   # Activation scripts run with a PATH that has NO git (only coreutils,
   # gnused, ...), so any git call there must use an absolute store path. The
@@ -155,8 +155,14 @@ in
         '';
 
     # ── hermes-tool + vendor-deploy on PATH for the agent (gateway service) and operator ──
-    services.hermes-agent.extraPackages = [ hermesToolPackage vendorDeployPackage ];
-    environment.systemPackages = [ hermesToolPackage vendorDeployPackage ];
+    services.hermes-agent.extraPackages = [
+      hermesToolPackage
+      vendorDeployPackage
+    ];
+    environment.systemPackages = [
+      hermesToolPackage
+      vendorDeployPackage
+    ];
 
     # ── Content lane recovery hook for hermes-deploy ──────────────────
     # When the deploy watchdog sees an unhealthy agent, try running
