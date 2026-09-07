@@ -10,11 +10,11 @@
   #   * Secrets are encrypted in-repo (agenix) and decrypted only at
   #     activation time on the target.
   #
-  # Real source code — the bot's own runtime (vendor/hermes-agent), and the
-  # nicegui/xaelWiki plugins that run in-process with it — is vendored as git
-  # submodules and built into the store like everything else in the system
-  # lane: no live/editable checkout, no restart-to-apply. Only content
-  # (skills, self-written tool scripts, MCP registrations — see
+  # Real source code — the bot's own runtime (hermes-agent), and the
+  # nicegui/xaelWiki plugins that run in-process with it — is consumed as
+  # rev-pinned GitHub inputs that are fetched into the Nix store at build time:
+  # no local vendor/ checkout, no submodules, no live-editable path. Only
+  # content (skills, self-written tool scripts, MCP registrations — see
   # modules/hermes-tools.nix) gets the fast, no-rebuild content lane. See
   # README "Two change lanes".
 
@@ -22,46 +22,26 @@
     # Keep the same channel as the build machine so eval behaves predictably.
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
 
-    # Hermes ships its own flake + NixOS module. VENDORED as a git submodule
-    # (vendor/hermes-agent) rather than a pinned github: rev: this is the
-    # bot's own source code, and any change to it must go through the same
-    # commit -> nixos-rebuild switch -> generation pipeline as everything
-    # else in the system lane (see README "Two change lanes"). `git+file:`
-    # fetches the submodule's OWN git history at whatever commit is checked
-    # out — uncommitted edits are invisible to the build (must be committed
-    # first, inside the submodule), and flake.lock pins the exact commit, so
-    # `nixos-rebuild switch` always builds a fully reproducible, immutable
-    # closure. To pick up a new commit made inside the submodule:
-    #   nix flake lock --update-input hermes-agent
-    # Rollback is a normal generation rollback: modules/hermes-deploy.nix
-    # additionally resets the outer repo (and `git submodule update`s every
-    # vendor/* submodule) to the commit that produced the target generation,
-    # so the on-disk checkout and the running closure never disagree.
-    #
-    # NB: `git+file:./relative/path` prints a Nix deprecation warning
-    # ("relative path... will stop working in a future release", nix#12281).
-    # It's still the correct fetcher here — `path:` was tried and rejected:
-    # it resolves against the OUTER repo's own git tracking rather than
-    # treating vendor/* as an independent nested repo, so it can't see a
-    # submodule's own commits at all. An absolute `git+file:///...` would
-    # dodge the warning but break portability (this repo lives at a
-    # different absolute path on the dev machine vs. the LXC's
-    # /var/lib/hermes-deploy). Revisit when nix#12281 lands a real fix.
+    # Hermes ships its own flake + NixOS module. PINNED as a GitHub input:
+    # the traverseda fork of hermes-agent. Changes land by pushing to the
+    # fork, running `nix flake lock --update-input hermes-agent` in this
+    # repo, then deploying a new generation. The input is `inputs.nixpkgs`
+    # followed to this repo's nixpkgs, so no stale/parallel pkgs.
     hermes-agent = {
-      url = "git+file:./vendor/hermes-agent?shallow=false";
+      url = "github:traverseda/hermes-agent";
       inputs.nixpkgs.follows = "nixpkgs";
     };
 
-    # hermes-nicegui and xaelWiki: same vendoring principle as hermes-agent
-    # above, just `flake = false` since they're plain source trees, not
-    # flakes themselves — modules/hermes-nicegui.nix and modules/xaelwiki.nix
+    # hermes-nicegui and xaelWiki: GitHub-flanked inputs (no submodule).
+    # Just `flake = false` since they're plain source trees, not flakes
+    # themselves — modules/hermes-nicegui.nix and modules/xaelwiki.nix
     # build a package from the fetched source.
     hermes-nicegui-src = {
-      url = "git+file:./vendor/hermes-nicegui";
+      url = "github:traverseda/hermes-nicegui";
       flake = false;
     };
     xaelwiki-src = {
-      url = "git+file:./vendor/xaelWiki";
+      url = "github:traverseda/xaelWiki";
       flake = false;
     };
 

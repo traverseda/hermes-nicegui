@@ -134,41 +134,26 @@ pkgs.runCommand "hermes-config-check"
     # ── git-repo bootstrap activation snippet ──────────────────────────
     # Without this, /var/lib/hermes-deploy on the box is NOT a git repo and
     # every deploy/rollback git phase silently no-ops (`|| true`).
+    # Contains a migration cleanup step that removes stale vendor/ dirs
+    # and .gitmodules from the old submodule vendoring era (idempotent).
     ${need "init -q" "hermes-deploy-repo.activation"}
     ${need "chown" "hermes-deploy-repo.activation"}
-    # vendor/* submodules (hermes-agent/hermes-nicegui/xaelWiki source) are
-    # real source code in the system lane now — they must be TRACKED by the
-    # ledger (not excluded), or a generation rollback can never actually
-    # restore a bad self-edit to vendor/hermes-agent. Regression guard for
-    # the previous design, which explicitly excluded vendor/ from the ledger.
-    ${mustNot "vendor" "hermes-deploy-repo.activation"}
+    ${need "rm -rf" "hermes-deploy-repo.activation"}
+    ${need "rm -f" "hermes-deploy-repo.activation"}
+    ${mustNot "submodule update --init" "hermes-deploy-repo.activation"}
 
-    # ── vendor/* submodules are materialized on first sync, never force-
-    #    reset (a code change ships by committing INSIDE the submodule, not
-    #    by the outer repo clobbering it) ───────────────────────────────
-    ${need "submodule update --init" "deploy.script"}
-
-    # ── generation <-> git-commit tagging + submodule-aware rollback ────
+    # ── generation <-> commit tagging + ledger rollback ─────────────────
     # Every switch tags the commit that produced it (`gen-<N>`); any
-    # rollback path resets the outer repo to that tag AND runs `git
-    # submodule update`, so vendor/* checkouts move in lockstep with the
-    # Nix generation — without this, rolling back a generation would not
-    # actually undo a bad edit to vendor/hermes-agent's own source, since
-    # the working tree would stay at the newer, bad commit.
+    # rollback path resets the outer repo to that tag, restoring the
+    # flake.lock (and hence the pinned vendored-source revs).
     ${need "tag_gen()" "deploy.script"}
     ${need "sync_repo_to_gen()" "deploy.script"}
     ${need "sync_repo_to_gen()" "rollback.script"}
-    ${need "submodule update --init --recursive" "rollback.script"}
     ${need ''tag -f "gen-$1" HEAD'' "deploy.script"}
 
-    # ── vendor/* submodules must be root-git-safe too ───────────────────
-    # `sync_repo_to_gen`'s `git submodule update` operates INSIDE each
-    # vendor/* submodule as root; without a safe.directory entry per
-    # submodule, that fails with "detected dubious ownership" and a
-    # rollback silently leaves vendor/* at the wrong commit.
-    ${need "directory = /var/lib/hermes-deploy/vendor/hermes-agent" "gitconfig"}
-    ${need "directory = /var/lib/hermes-deploy/vendor/hermes-nicegui" "gitconfig"}
-    ${need "directory = /var/lib/hermes-deploy/vendor/xaelWiki" "gitconfig"}
+    # ── gitconfig: only the repo dir and content lane need safe.directory ─
+    ${need ''directory = /var/lib/hermes-deploy'' "gitconfig"}
+    ${need ''directory = /var/lib/hermes/content'' "gitconfig"}
 
     # ── agent gateway unit exists and is enabled ───────────────────────
     # The bot is root by design (hosts/hermes/configuration.nix): the unit

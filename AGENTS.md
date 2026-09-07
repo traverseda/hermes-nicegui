@@ -14,14 +14,13 @@ modules/hermes-deploy.nix        # deploy/rollback/watchdog machinery
 modules/hermes-tools.nix         # git-backed content store + hermes-tool (content lane)
 modules/hermes-skills.nix        # vendored skills wiring
 modules/hermes-dashboard.nix     # web dashboard (hermesagent.lan:9119)
-modules/hermes-nicegui.nix       # hermes-nicegui UI (vendor submodule, system lane)
+modules/hermes-nicegui.nix       # hermes-nicegui UI (rev-pinned GitHub input, system lane)
 modules/hermes-ha.nix            # Home Assistant profile proxy
 modules/hindsight.nix            # Hindsight memory service (podman)
 modules/exposure.nix             # tailnet exposure registry (auth-enforced)
 modules/cloudflare-tunnel.nix    # public exposure via Cloudflare Tunnel
 modules/xaelwiki.nix             # xaelwiki notes MCP server
 modules/llm.nix                  # model config shared W/ all services
-vendor/                          # git submodules: hermes-agent, hermes-nicegui, xaelWiki
 scripts/deploy.sh                # build locally, push closure, activate LXC
 scripts/rollback.sh              # step back one generation + git reset
 scripts/test.sh                  # nix flake check | vm | test
@@ -34,19 +33,19 @@ opencode.json                    # project opencode config (+ @vectorize-io/open
 
 ## Two change lanes
 
-**System lane** = Nix rebuild + new generation. Owner: this flake repo (plus
-vendor/* submodules). Changes: gateway unit, packages, firewall, secrets,
-daemons, vendored source (`vendor/hermes-agent`, `vendor/hermes-nicegui`,
-`vendor/xaelWiki`). Rollback: `hermes-rollback` (one generation + resets
-vendor/* submodules to the matching tag).
+**System lane** = Nix rebuild + new generation. Owner: this flake repo.
+Changes: gateway unit, packages, firewall, secrets, daemons, vendor source
+(hermes-agent, hermes-nicegui, xaelWiki). Rollback: `hermes-rollback` (one
+generation rollback; vendored-source revs are pinned in flake.lock).
 
 **Content lane** = `hermes-tool` → auto-commit → git. Owner:
 `/var/lib/hermes/content` (own git repo). Changes: skills, tool scripts, MCP
 servers. Restart cost: skills (none), bin (none), MCP (gateway restart only).
 Rollback: `hermes-tool revert` (restores `content-good` tag).
 
-Vendored source (`vendor/*`) is system lane, NOT content lane — it's real
-in-process code that can break the gateway on a bad edit.
+Vendored source is system lane, NOT content lane — it's real in-process code
+that can break the gateway on a bad edit. Vendored source is consumed from
+rev-pinned GitHub inputs (no local vendor/ directory or submodules).
 
 ## CRITICAL: DATA SAFETY — NEVER DESTROY REMOTE GIT OR STATE
 
@@ -54,9 +53,8 @@ in-process code that can break the gateway on a bad edit.
 
 1. **NEVER `rsync` a `.git/` directory to a remote** — overwrites the entire git database of objects and refs, destroying any commits that exist only locally on the remote. Always `git push`, `git clone`, or `git pull` — never binary-replace git state.
 2. **NEVER `git push --force`** to any remote branch — destroys commits on the remote.
-3. **NEVER `git rm --cached vendor/` then `git submodule add` on hermes's live repo** — replaces submodules in the index and can lose commits/changes.
-4. **NEVER use `rsync -a .git/` to sync the flake repo** — if the remote has local commits (the bot makes them), they are destroyed. Use `git worktree` or `git push/pull` instead.
-5. **ALWAYS assume the remote's git repo has unpushed commits** — the bot self-deploys and commits directly. These commits are the ONLY record of content-lane changes (skills, tools, MCP servers). Losing them breaks rollback.
+3. **NEVER use `rsync -a .git/` to sync the flake repo** — if the remote has local commits (the bot makes them), they are destroyed. Use `git worktree` or `git push/pull` instead.
+4. **ALWAYS assume the remote's git repo has unpushed commits** — the bot self-deploys and commits directly. These commits are the ONLY record of content-lane changes (skills, tools, MCP servers). Losing them breaks rollback.
 
 If you need to update something on a remote repo, you must use non-destructive operations: `git push`, `git fetch + git pull --rebase`, or explicitly state what will be lost and get confirmation.
 
@@ -76,43 +74,43 @@ scripts/patch-hermes.sh --dry-run        # verify patches (see patches/README.md
 
 > **Rule:** Always use `nix flake check --no-build` unless a real build is explicitly needed. The `--no-build` flag runs eval-time config checks instantly (seconds) without building derivations. Only run without `--no-build` when you specifically need to verify that derivations build correctly.
 
-## Editing vendor submodules (hermes-agent / hermes-nicegui / xaelWiki)
+## Editing vendored source (hermes-agent / hermes-nicegui / xaelWiki)
 
-**Every vendored edit must be committed INSIDE the submodule first**, then
-`nix flake lock --update-input` bumps flake.lock:
+Vendored sources are pinned as GitHub flake inputs (`github:traverseda/<repo>`).
+To push a code change:
 
 ```sh
-cd vendor/hermes-agent
-# ... edit files ...
+# Push to the fork's main branch (hermes-agent is already on the fork)
+cd vendor/hermes-agent    # or vendor/hermes-nicegui, vendor/xaelWiki
 git add -A && git commit -m "fix: <whatever>"
+git push origin main
 cd ../..
+
+# Lock the new commit in flake.lock → deploy
 nix flake lock --update-input hermes-agent
-git add vendor/hermes-agent flake.lock
-git commit -m "hermes-agent: fix <whatever>"
+git add flake.lock
+git commit -m "hermes-agent: update to latest main"
+nix flake check --no-build
 scripts/deploy.sh
 ```
 
 Same pattern for `vendor/hermes-nicegui` (input: `hermes-nicegui-src`) and
-`vendor/xaelWiki` (input: `xaelwiki-src`). An uncommitted submodule edit is
-invisible to the build — this has shipped broken before.
+`vendor/xaelWiki` (input: `xaelwiki-src`). The `vendor-deploy` shortcut below
+combines these steps.
 
 ### Automated vendor-deploy script
 
-On the LXC, use `scripts/vendor-deploy` to commit a submodule, update
-flake.lock, validate, and optionally deploy in one command. This is
-recommended over the manual 4-step sequence to avoid forgetting the
-`nix flake lock` step:
+Use `scripts/vendor-deploy` to push, re-lock, validate, and optionally deploy:
 
 ```sh
 # Commit and validate only:
-vendor-deploy vendor/hermes-agent "fix: <whatever>" --dry-run
+vendor-deploy hermes-agent "fix: <whatever>" --dry-run
 
 # Commit, validate, AND deploy:
-vendor-deploy vendor/hermes-agent "fix: <whatever>" --deploy
+vendor-deploy hermes-agent "fix: <whatever>" --deploy
 ```
 
-Submodule names: `hermes-agent`, `hermes-nicegui`, `xaelWiki`.
-The script maps these automatically to their flake input names.
+Package names: `hermes-agent`, `hermes-nicegui`, `xaelWiki`.
 
 ## SSH access & deploy host
 
@@ -132,34 +130,33 @@ The bot runs from within the LXC using:
 **Critical: before ANY deploy, fix vendor flake.lock if you edited vendor/\*:**
 
 ```
-# Step 1: commit vendor submodule, then update flake.lock
+# Step 1: commit vendor source, then update flake.lock
 cd vendor/<submodule-name>
 git add -A && git commit -m "fix: <whatever>"
+git push origin main
 cd ../..
-nix flake lock --update-input <submodule-name>  # ← THIS IS REQUIRED
+nix flake lock --update-input <input-name>  # ← THIS IS REQUIRED
 # Step 2: verify the fix
 nix flake check --no-build                       # ← always do this before deploying
 # Step 3: deploy
 hermes-deploy                                    # or: nixos-rebuild --flake /var/lib/hermes-deploy#hermes
 ```
 
-If `nix flake check --no-build` fails with a "hash mismatch" error, it means the
-narHash in `flake.lock` no longer matches the content of the vendor submodule.
-The fix is always `nix flake lock --update-input <input>` followed by committing
-the updated `flake.lock`. This is the #1 cause of self-deploy failure.
-
 **Why this works on the LXC despite "read-only root filesystem":**
 NixOS root FS is read-only/immutable (normal for NixOS). `nixos-rebuild switch`
 does NOT write to `/` — it builds to the Nix store (which IS writable), then
-switches the system profile to point to the new generation. The store is a copy-on-wriite hash store, not a writable filesystem. The bot (hermes) is a `trusted-users` in nix.conf and has passwordless sudo, so it can run `nixos-rebuild` and `hermes-deploy` directly.
+switches the system profile to point to the new generation. The store is a copy-on-
+write hash store, not a writable filesystem. The bot (hermes) is a `trusted-users`
+in nix.conf and has passwordless sudo, so it can run `nixos-rebuild` and
+`hermes-deploy` directly.
 
 **What the deployScript does on the LXC:**
 1. `git -C /var/lib/hermes-deploy add -A && commit` (records any uncommitted edits)
-2. `nix flake check --no-build` (fails fast if vendor narHash drift or syntax error)
+2. `nix flake check --no-build` (fails fast if syntax error)
 3. `nixos-rebuild switch --max-jobs 1 --cores 2 --flake /var/lib/hermes-deploy#hermes`
 4. Health-check (`hermes-agent active` + `hermes doctor`) with grace period
 5. If unhealthy → content-recovery (`hermes-tool revert`) → then generation rollback (one step back)
-6. `sync_repo_to_gen` — resets git + vendor/ submodules to the rolled-back generation's commit
+6. `sync_repo_to_gen` — resets git ledger to the rolled-back generation's commit
 
 ### From azrael (build machine)
 
@@ -176,8 +173,9 @@ HERMES_HOST=root@hermes.lan scripts/deploy.sh [--dry-run] [--snapshot]
 7. Starts `hermes-rollback.service` watchdog
 
 The build machine is the source of truth for the git repo history — it runs
-full nixpkgs-based builds and copies the closure via `nix copy`. The LXC also
-has its own git repo for the bot's local commits and can self-deploy directly.
+full nixpkgs-based builds (vendor source is fetched from GitHub inputs — no
+local vendor checkout needed). The LXC also has its own git repo for the bot's
+local commits and can self-deploy directly.
 Default host is `root@192.168.193.158` (zerotier), override with `HERMES_HOST`.
 
 Both paths create `gen-<N>` tags in the git ledger and update
@@ -234,14 +232,6 @@ nix build .#checks.x86_64-linux.hermes-integration   # slow runtime integration 
 `tests/*-config-check.nix` are eval-time assertions on generated systemd units
 (no VM boot). `tests/hermes-test.nix` is the slow runtime integration test.
 
-## Vendored source live-editing
-
-`hermes-agent` can run from a LIVE source checkout on the LXC (not the store
-package): edit via the nicegui Files tab → `vendor/hermes-agent`, then
-`systemctl restart hermes-agent`. Roll back with `git -C /var/lib/hermes-deploy/vendor/hermes-agent checkout -- .
-+ git clean -fd`. A broken edit crash-loops the gateway until reverted.
-Disable by setting `hermesDeploy.editableAgentSrc = null` in the flake.
-
 ## opencode on this repo
 
 `opencode.json` configures the `@vectorize-io/opencode-hindsight` plugin
@@ -269,53 +259,20 @@ failure modes) and judgment factors. A test deleted to pass a change is an
 automatic reject. Code-lane changes that ship without a matching `flake.lock`
 bump are also auto-rejects.
 
-### NAR hash errors (force-push recovery)
-
-NAR hash errors are the #1 cause of build/deploy failure. They happen when an
-upstream vendor repo (hermes-agent, hermes-nicegui, xaelWiki) is **force-pushed**
-— the commit stays the same but the content changes, so the NAR hash in the
-binary cache or `flake.lock` no longer matches the actual files.
-
-Symptoms include:
-- `error: hash mismatch in newly downloaded content` — binary cache has stale hash
-- `error: path '...' is not valid` — derivation references a NAR that doesn't exist
-- `nix flake check` fails with a hash mismatch on a vendor input
-
-**Fix — try these steps in order:**
-
-```sh
-# Step 1: check which vendor is broken (from error message)
-# e.g. "vendor/hermes-agent" — adjust input name below
-
-cd vendor/hermes-agent
-git fetch origin
-git checkout main        # ensure locally pointing at latest main
-cd ../..
-
-# Step 2: update flake.lock to get the correct NAR hash
-nix flake lock --update-input hermes-agent
-
-# Step 3: verify
-nix flake check --no-build   # should pass now
-```
-
-If `nix flake check --no-build` still fails with a hash mismatch after step 2,
-the binary cache itself has a stale entry. Try:
-
-```sh
-nix flake check --no-build --refresh
-```
-
-The `--refresh` flag tells Nix to re-evaluate the content hash instead of using
-the cached version. This is the nuclear option for binary-cache-side stale hashes —
-it forces Nix to re-derive everything from scratch.
-
-**Prevention:** After force-pushing a vendor repo, always run
-`nix flake lock --update input` and commit the updated `flake.lock` before
-deploying. The deploy scripts run `nix flake check --no-build` as a pre-check
-and will fail fast if the hash drifts.
-
 ### Patching hermes-agent
 
 Local patches ship through a fork. Patch content lives in `patches/` and is
-applied onto the upstream rev from `patches/upstream.lock`. See `patches/README.md` for the full workflow. The bot (on the LXC) cannot push to the fork — patch authoring runs on the build machine.
+applied onto the upstream rev from `patches/upstream.lock`. Run on the build
+machine to push the `patched` branch to your fork:
+
+```sh
+HERMES_FORK=gittraverseda/hermes-agent \
+HERMES_FORK_REMOTE=git@github.com:traverseda/hermes-agent.git \
+  scripts/patch-hermes.sh --dry-run   # verify first
+scripts/patch-hermes.sh              # applies, pushes, re-locks, builds
+```
+
+The script pushes the patch series to the fork's `patched` branch and re-points
+the hermes-agent flake input to `github:traverseda/hermes-agent/patched`.
+The bot (on the LXC) cannot push to the fork — patch authoring runs on the
+build machine.

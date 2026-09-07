@@ -63,8 +63,8 @@ if [[ -n "$UPDATE_UPSTREAM" ]]; then
 fi
 
 if [[ "$DRY_RUN" != true ]]; then
-  : "${HERMES_FORK:?set HERMES_FORK (flake URL of your fork, e.g. github:you/hermes-agent)}"
-  : "${HERMES_FORK_REMOTE:?set HERMES_FORK_REMOTE (git URL to push, e.g. git@github.com:you/hermes-agent.git)}"
+  : "${HERMES_FORK:?set HERMES_FORK (flake URL of your fork, e.g. github:traverseda/hermes-agent)}"
+  : "${HERMES_FORK_REMOTE:?set HERMES_FORK_REMOTE (git URL to push, e.g. git@github.com:traverseda/hermes-agent.git)}"
 fi
 
 PATCH_FILES=()
@@ -102,17 +102,16 @@ if [[ "$DRY_RUN" == true ]]; then
   exit 0
 fi
 
-echo "== pushing patched to ${HERMES_FORK_REMOTE} =="
-git -C "$TMP/hermes-agent" remote add fork "$HERMES_FORK_REMOTE"
-git -C "$TMP/hermes-agent" push --force fork patched
+  echo "== pushing patched to ${HERMES_FORK_REMOTE} =="
+  git -C "$TMP/hermes-agent" remote add fork "$HERMES_FORK_REMOTE"
+  git -C "$TMP/hermes-agent" push -q fork patched
 
-NEW_URL="${HERMES_FORK}/${NEW_REV}"
-echo "== pointing hermes-agent input at ${NEW_URL} =="
-perl -pi -e 'if (/hermes-agent/) { s|url = "[^"]*"|url = "'"$NEW_URL"'"| }' flake.nix
-grep -n 'url =' flake.nix
+  echo "== pointing hermes-agent input at the patched branch =="
+  perl -pi -e 's|github:(\S+)/hermes-agent$|github:$1/hermes-agent/patched|' flake.nix
+  grep -n 'url =' flake.nix
 
-echo "== updating flake.lock =="
-nix flake lock --update-input hermes-agent
+  echo "== updating flake.lock =="
+  nix flake lock --update-input hermes-agent
 
 if [[ "$BUILD" == true ]]; then
   echo "== verifying toplevel build =="
@@ -122,7 +121,7 @@ fi
 cat <<EOF
 
 Patches applied to ${UPSTREAM_REV} and pushed as fork branch 'patched'
-(${NEW_REV}). flake.nix now points at ${NEW_URL}; flake.lock updated.
+(${NEW_REV}). flake.nix now uses the /patched branch; flake.lock updated.
 
 Next steps:
   git add patches/ flake.nix flake.lock && git commit -m "hermes: apply local patch(es)"

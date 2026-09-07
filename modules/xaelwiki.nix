@@ -6,16 +6,9 @@
 #
 # Design — vendored source (system lane) + a separate, genuinely low-stakes
 # notes vault (content, not code):
-#   * The xaelWiki SOURCE (the MCP server code) ships as a git submodule
-#     (vendor/xaelWiki), fetched by the `xaelwiki-src` flake input
-#     (git+file:./vendor/xaelWiki) and built into the Nix store like any
-#     other flake input. It is application code that runs as a network-facing
-#     MCP server with write access to the notes vault, so — same as
-#     hermes-agent / hermes-nicegui — it is NOT live-editable: a change
-#     requires a commit inside the submodule, `nix flake lock --update-input
-#     xaelwiki-src`, and a `nixos-rebuild switch`. modules/hermes-deploy.nix's
-#     generation-aware rollback resets vendor/xaelWiki's checkout (via `git
-#     submodule update`) to match whichever generation is restored.
+#   * The xaelWiki SOURCE is consumed from a rev-pinned GitHub flake input
+#     (xaxwiki-src). Changes require a commit inside the fork, `nix flake
+#     lock --update-input xaxwiki-src`, and a `nixos-rebuild switch`.
 #   * The NOTES VAULT (the actual markdown content) is what stays fast and
 #     low-stakes: a separate git repo cloned from the operator's Codeberg
 #     remote (notes.git) with a dedicated SSH deploy key. The server auto-pulls

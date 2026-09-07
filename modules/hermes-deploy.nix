@@ -44,17 +44,11 @@
 #   * Proxmox snapshots (pct snapshot) - external safety net, scripted in
 #     scripts/deploy.sh.
 #
-# Submodule-aware rollback: vendor/hermes-agent, vendor/hermes-nicegui, and
-# vendor/xaelWiki are real git submodules, tracked normally by ${cfg.repoDir}
-# (no more excluding vendor/ from the ledger that was the previous design,
-# and it meant a generation rollback could never actually undo a bad self-edit
-# to the agent's own source). Every commit that produces a generation gets
-# tagged `gen-<N>`; any rollback path (deploy-time auto-rollback,
-# hermes-rollback) resets the repo to that tag AND runs `git
-# submodule update` afterwards, so vendor/* checkouts always move in lockstep
-# with the Nix generation they belong to. Without the submodule sync step, the
-# NEXT deploy would just re-propose the same bad vendored code, since `git add
-# -A` picks up whatever commit each submodule currently has checked out.
+# Vendored source (hermes-agent, hermes-nicegui, xaelWiki) ships as rev-pinned
+# GitHub flake inputs. Every gen-<N> tag captures the flake.lock at build time,
+# so a rollback to that tag restores the correct input revs automatically. No
+# submodule sync — flake.lock resets to the target tag's content and Nix
+# re-freshes the input tarballs on next build.
 
 {
   config,
@@ -393,7 +387,7 @@ let
   '';
 
   # ── Git sync functions ──────────────────────────────────────────────
-  # Shared by deploy, rollback, and content recovery scripts.
+  # Shared by deploy and rollback scripts.
   #
   # tag_gen: record which commit produced a generation, right after a switch
   # (regardless of whether it turns out healthy - this is a factual mapping,
@@ -402,13 +396,11 @@ let
   # sync_repo_to_gen: the git-ledger half of a rollback. A Nix-level rollback
   # (rollbackGeneration above) only restores the system closure; it does
   # nothing to ${cfg.repoDir}'s working tree. Without also moving the outer
-  # repo (and therefore every vendor/* submodule gitlink in it) back to the
-  # commit that produced the target generation, the working tree stays at the
-  # newer/bad commit and the next deploy's `git add -A` would just re-propose
-  # the exact code that was just rolled back from. `git submodule update`
-  # after the reset moves each vendor/* submodule to the commit recorded in
-  # that commit's tree (a plain, well-defined git operation - submodules are
-  # ordinary gitlinks).
+  # repo back to the commit that produced the target generation, the
+  # working tree stays at the newer/bad commit and the next deploy's
+  # `git add -A` would re-propose the broken config. A `git reset --hard` to
+  # the gen-<N> tag also restores the flake.lock that pins the correct
+  # vendored-source revs.
   gitSyncFns = ''
     tag_gen() {
       git -C ${cfg.repoDir} tag -f "gen-$1" HEAD >/dev/null 2>&1 || true
@@ -417,10 +409,9 @@ let
       local gen="$1"
       if git -C ${cfg.repoDir} rev-parse -q --verify "refs/tags/gen-$gen" >/dev/null 2>&1; then
         git -C ${cfg.repoDir} reset --hard "gen-$gen"
-        git -C ${cfg.repoDir} submodule update --init --recursive 2>/dev/null || true
-        log "synced git ledger + vendor/ submodules to gen-$gen"
+        log "synced git ledger to gen-$gen"
       else
-        log "FATAL: no gen-$gen tag - git ledger/vendor/ NOT moved, only Nix rolled back"
+        log "FATAL: no gen-$gen tag - git ledger NOT moved, only Nix rolled back"
         log "Next deploy will re-package the newer source and re-propose broken config"
         log "This unit MUST exit 1 to prevent permanent Nix-source misalignment"
         exit 1
@@ -448,12 +439,9 @@ let
       flock -w 10 200 || exit 1
       git -C ${cfg.repoDir} config user.name "hermes-deploy"
       git -C ${cfg.repoDir} config user.email "hermes-deploy@localhost"
-      git -C ${cfg.repoDir} add -A
+      git -C ${cfg.repoDir} add -A 2>/dev/null || true
       git -C ${cfg.repoDir} commit -q -m "deploy $(date -Is)" 2>/dev/null || true
     ) 200>/tmp/hermes-deploy-git.lock
-    # Submodules: git submodule update does not touch the same index file as
-    # add/commit, so it does not need the lock.
-    git -C ${cfg.repoDir} submodule update --init --recursive 2>/dev/null || true
 
     PREV_GEN=$(${currentGeneration})
     log "previous generation: $PREV_GEN"
@@ -466,7 +454,7 @@ let
     if ! nix flake check --no-build "$cfg.repoDir" 2>&1 | tee -a /var/log/hermes-deploy.log; then
       log "pre-deploy validation FAILED — aborting deploy"
       log "Run 'nix flake check --no-build' to see the full error."
-      log "Common fix: cd vendor/<submodule> && git add -A && git commit -q -m 'fix: <msg>' && nix flake lock --update-input <input>"
+      log "Common fix: commit/push to the fork reop, then `nix flake lock --update-input hermes-agent` (or the equivalent nicegui/xaelwiki input), commit flake.lock, and re-deploy."
       deliver_callback 1 "validation-failed" ""
       exit 1
     fi
@@ -745,42 +733,26 @@ in
     #    hermes-status, and every activation). git >=2.35 refuses to operate on
     #    a repo owned by another user (CVE-2022-24765), so without an explicit
     #    exception every root-run git command fails with "detected dubious
-    #    ownership". `sync_repo_to_gen`'s `git submodule update` runs INSIDE
-    #    each vendor/* submodule as root too - each one needs its own
-    #    safe.directory entry, or a rollback silently fails to sync vendor/*
-    #    with the same "dubious ownership" error. Scope the exception to
-    #    exactly the repos this module manages - never `safe.directory = *`,
-    #    which would let the sandboxed bot trick root into running git
-    #    hooks. --------------------------------------
+    #    ownership". Scope the exception to exactly the repos this module
+    #    manages — never `safe.directory = *`, which would let the sandboxed
+    #    bot trick root into running git hooks.
     environment.etc."gitconfig" = {
       text = ''
         [safe]
           directory = ${cfg.repoDir}
-          directory = ${cfg.repoDir}/vendor/hermes-agent
-          directory = ${cfg.repoDir}/vendor/hermes-nicegui
-          directory = ${cfg.repoDir}/vendor/xaelWiki
-          ${lib.optionalString (
-            config ? services.hermes-tools
-          ) "directory = ${config.services.hermes-tools.contentDir}"}
+          ${lib.optionalString (config ? services.hermes-tools) "directory = ${config.services.hermes-tools.contentDir}"}
       '';
     };
 
     # Make ${cfg.repoDir} a real git checkout the bot can edit and roll back
-    # against. scripts/deploy.sh rsyncs the working tree WITHOUT `.git` (the
-    # box keeps its own local ledger) and nothing on the box ever creates one
-    # - so the deploy/rollback git phases silently no-op (`|| true`), the bot
-    # has nowhere to commit, and hermes-status says "not a git repository".
-    # Runs on EVERY activation: re-claims ownership (operator rsyncs land as
-    # the build machine's uid, unknown on the box) and git-inits once.
+    # against. The operator pushes a fresh copy (scripts/deploy.sh nix-copy),
+    # and the box builds from its own checked-out repo on every
+    # nixos-rebuild switch. Runs on EVERY activation: re-claims ownership and
+    # git-inits once.
     #
-    # vendor/ IS tracked and hermes-owned like the rest of the tree - the bot
-    # edits vendored source there, and the ledger needs the resulting gitlink
-    # commits for `sync_repo_to_gen` (above) to be able to move vendor/*
-    # submodules back in step with a rolled-back generation. Only state/
-    # (root-owned rollback bookkeeping: last-known-good, gen-<N> tags apply to
-    # the whole repo so they're fine either way) is excluded - a `git reset
-    # --hard` must never touch root-owned files the bot can't write, and
-    # state/last-known-good must survive a reset that undoes everything else.
+    # Only state/ (root-owned rollback bookkeeping: last-known-good, gen-<N>
+    # tags) must be excluded from the ledger — a `git reset --hard` must
+    # never touch root-owned files the bot can't write.
     system.activationScripts.hermes-deploy-repo = lib.stringAfter [ "users" ] ''
       mkdir -p ${cfg.repoDir}
       chown ${config.services.hermes-agent.user}:${config.services.hermes-agent.group} ${cfg.repoDir}
@@ -792,10 +764,15 @@ in
         ${lib.getExe pkgs.git} -C ${cfg.repoDir} add -A 2>/dev/null || true
         ${lib.getExe pkgs.git} -C ${cfg.repoDir} commit -q -m "initial import from operator deploy" 2>/dev/null || true
       fi
-      # Git submodules (hermes-agent, hermes-nicegui) are NOT rsync-ed to the box -
-      # they are tracked separately in the flake repo. Initialize them now so
-      #  the hermes-agent binary can find its venv for its bundled Python deps.
-      ${lib.getExe pkgs.git} -C ${cfg.repoDir} submodule update --init --recursive 2>/dev/null || true
+      # ── Migration cleanup ────────────────────────────────────────────
+      # Remove any leftover submodule state from the old git+file vendoring
+      # era. On the first activation after this change, ${cfg.repoDir} may
+      # still contain vendor/ directories with nested .git repos, plus
+      # .gitmodules and gitlink index entries. This cleanup is idempotent.
+      rm -rf "${cfg.repoDir}/vendor"
+      rm -f "${cfg.repoDir}/.gitmodules"
+      git -C ${cfg.repoDir} rm -r --cached vendor 2>/dev/null || true
+      git submodule deinit -f --all 2>/dev/null || true
       # Ledger hygiene: state/ (root-owned rollback bookkeeping) must NOT be
       # tracked, so a `git reset --hard` in sync_repo_to_gen never touches it.
       grep -q '^state/$' ${cfg.repoDir}/.git/info/exclude 2>/dev/null \
@@ -972,8 +949,14 @@ in
         '')
         (pkgs.writeShellScriptBin "hermes-status" ''
           echo "== git =="; git -C ${cfg.repoDir} log --oneline -5
-          echo "== vendor/ =="
-          git -C ${cfg.repoDir} submodule status --recursive 2>/dev/null || echo "(no submodules)"
+          echo "== vendor inputs =="
+          python3 -c '
+import json
+n = json.load(open("'''${cfg.repoDir}'''/flake.lock")).get("nodes", {})
+for k in ("hermes-agent","hermes-nicegui-src","xaelwiki-src"):
+    rev = n.get(k,{}).get("locked",{}).get("rev","?")
+    print(f"  {k}: {rev}")
+'
           echo "== generations =="; nix-env -p /nix/var/nix/profiles/system --list-generations
           echo "== last-known-good =="; cat ${cfg.stateDir}/last-known-good 2>/dev/null || echo none
           RUNNING_GEN=$(${currentGeneration})

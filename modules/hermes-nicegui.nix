@@ -9,17 +9,13 @@
 # CLI. Kanban talks to the dashboard's own web server instead (cookie login).
 #
 # Design — vendored source, system lane (see README "Two change lanes"):
-#   * The SOURCE ships as a git submodule (vendor/hermes-nicegui), fetched by
-#     the `hermes-nicegui-src` flake input (git+file:./vendor/hermes-nicegui)
-#     and built into the Nix store like any other flake input. Editing the
-#     submodule requires a commit inside it, `nix flake lock --update-input
-#     hermes-nicegui-src`, and a `nixos-rebuild switch` to take effect — there
-#     is no live/editable checkout and no restart-to-apply. This is
-#     deliberate: it's in-process application code, not low-stakes content, so
-#     it gets the same commit -> switch -> generation rollback safety net as
-#     everything else in the system lane. modules/hermes-deploy.nix's
-#     generation-aware rollback resets vendor/hermes-nicegui's checkout (via
-#     `git submodule update`) to match whichever generation is restored.
+#   * The SOURCE ships as a rev-pinned GitHub flake input
+#     (hermes-nicegui-src). Editing requires a commit inside the fork, `nix
+#     flake lock --update-input hermes-nicegui-src`, and a `nixos-rebuild
+#     switch` to take effect — there is no live/editable checkout and no
+#     restart-to-apply. This is deliberate: it's in-process application
+#     code, not low-stakes content, so it gets the same commit -> switch ->
+#     generation rollback safety net as everything else in the system lane.
 #   * PLUGIN DISCOVERY WITHOUT A PIP INSTALL. hermes-nicegui discovers its
 #     built-in plugins via the `hermes_nicegui.plugins` importlib.metadata
 #     entry-point group (web.py::build → plugin.py::load_plugins). Rather than

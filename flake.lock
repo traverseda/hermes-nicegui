@@ -79,34 +79,33 @@
         "uv2nix": "uv2nix"
       },
       "locked": {
-        "lastModified": 1788797634,
-        "narHash": "sha256-0Gr7ImDQtQcxMRfpkIDs+xF4tSvIsbvrxZSUE0fetHc=",
-        "ref": "refs/heads/main",
-        "rev": "233757037df1f03f9fe1cfddc097acd5ad7f7510",
-        "revCount": 32619,
-        "shallow": false,
-        "type": "git",
-        "url": "file:./vendor/hermes-agent"
+        "lastModified": 1788816641,
+        "narHash": "sha256-Ptd71VtGHZl7/Sqq9IR/S5OBO87jUso86rbhlONDCLM=",
+        "owner": "traverseda",
+        "repo": "hermes-agent",
+        "rev": "6178e9f4eed8d99f4fc550add939d58c7bed6206",
+        "type": "github"
       },
       "original": {
-        "shallow": false,
-        "type": "git",
-        "url": "file:./vendor/hermes-agent"
+        "owner": "traverseda",
+        "repo": "hermes-agent",
+        "type": "github"
       }
     },
     "hermes-nicegui-src": {
       "flake": false,
       "locked": {
-        "lastModified": 1788739627,
-        "narHash": "sha256-ymoszBbj3aNutAoAjCjx8Qxf1Qtps+JmiPe+C1IAJFw=",
-        "rev": "f2abcb3f8973f7b155555f4e955d72d257035fbd",
-        "revCount": 43,
-        "type": "git",
-        "url": "file:./vendor/hermes-nicegui"
+        "lastModified": 1788787066,
+        "narHash": "sha256-B7dQ1ELhqdKObB1XUASC/EGwyzoPUgIWBm9WgvXo+gE=",
+        "owner": "traverseda",
+        "repo": "hermes-nicegui",
+        "rev": "2af0d22a00fdd5c215921656fe614d6a9c178164",
+        "type": "github"
       },
       "original": {
-        "type": "git",
-        "url": "file:./vendor/hermes-nicegui"
+        "owner": "traverseda",
+        "repo": "hermes-nicegui",
+        "type": "github"
       }
     },
     "home-manager": {
@@ -292,15 +291,15 @@
       "locked": {
         "lastModified": 1786550284,
         "narHash": "sha256-XH/jle0FMUneujCnSPPqs/Yec7ADruDQwkwlzOB3eIA=",
-        "ref": "refs/heads/main",
+        "owner": "traverseda",
+        "repo": "xaelWiki",
         "rev": "887a93054f535a8d18688960253833839fcac28d",
-        "revCount": 15,
-        "type": "git",
-        "url": "file:./vendor/xaelWiki"
+        "type": "github"
       },
       "original": {
-        "type": "git",
-        "url": "file:./vendor/xaelWiki"
+        "owner": "traverseda",
+        "repo": "xaelWiki",
+        "type": "github"
       }
     }
   },

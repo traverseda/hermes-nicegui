@@ -32,12 +32,11 @@
 
   # Bind-mount the deploy repo into the agent workspace so the nicegui Files
   # tab (sandboxed to HERMES_FILES_ROOT=/var/lib/hermes/workspace) can
-  # browse/edit the flake and vendor code. Bind mounts are invisible to path
+  # browse/edit the flake and source code. Bind mounts are invisible to path
   # resolution, so the files-plugin sandbox check passes while the Files tab
   # shows the SAME live tree — no copy, no divergence, and the
-  # deploy/rollback/watchdog/rsync pipeline is untouched. Browser edits land
-  # as uncommitted changes in the repo (intended for vendor/ submodules, per
-  # "Editing vendored source" in the README — they still need a commit +
+  # deploy/rollback/watchdog pipeline is untouched. Browser edits land
+  # as uncommitted changes in the repo (they still need a commit +
   # nixos-rebuild to ship). Nothing about this mount technically restricts
   # edits to vendor/ alone; the whole repoDir, including flake.nix and hosts/,
   # is reachable this way. That's a deliberate tradeoff, not an oversight —
@@ -245,10 +244,10 @@
   };
 
   # ── xaelwiki notes MCP server ────────────────────────────────────────
-  # Editable, low-stakes, independently revertible. Source runs live from the
-  # vendor/xaelWiki submodule (symlinked into the run location); notes vault is
-  # a git clone of codeberg notes.git via the xaelwiki SSH deploy key. The MCP
-  # bearer token comes from xaelwiki-env; the deploy key from xaelwiki-ssh.
+  # Editable, low-stakes, independently revertible. Source is fetched as a
+  # GitHub input at build time; notes vault is a git clone of codeberg
+  # notes.git via the xaelwiki SSH deploy key. The MCP bearer token comes
+  # from xaelwiki-env; the deploy key from xaelwiki-ssh.
   services.xaelwiki = {
     enable = true;
     environmentFile = "/run/agenix/xaelwiki.env";
