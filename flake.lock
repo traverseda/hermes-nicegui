@@ -78,10 +78,10 @@
         "uv2nix": "uv2nix"
       },
       "locked": {
-        "lastModified": 1788731857,
-        "narHash": "sha256-lh3lD1uK3KVDowPa4hRupcYQ+6sU5yedU7VgtSXCQHU=",
-        "rev": "c9bfb39e271af80fc77f6f418a973a7b1c859f12",
-        "revCount": 22408,
+        "lastModified": 1788729645,
+        "narHash": "sha256-sOHs6Y0w0cXOykU8IJl3X5rdU2OqchD5h5BatGtsbhk=",
+        "rev": "693641aa8b4359c602283bdbbc14041e03bc47bc",
+        "revCount": 32270,
         "shallow": false,
         "type": "git",
         "url": "file:./vendor/hermes-agent"
@@ -95,10 +95,11 @@
     "hermes-nicegui-src": {
       "flake": false,
       "locked": {
-        "lastModified": 1788724441,
-        "narHash": "sha256-+Sz4ohFWXAgIaqZE5lWTls/VLoQKXAQa3v8V8ElJGsU=",
-        "rev": "ab5ff3eabc5800f4f6de5cffb641e3baf24e8ac7",
-        "revCount": 39,
+        "lastModified": 1788739627,
+        "narHash": "sha256-ymoszBbj3aNutAoAjCjx8Qxf1Qtps+JmiPe+C1IAJFw=",
+        "ref": "refs/heads/main",
+        "rev": "f2abcb3f8973f7b155555f4e955d72d257035fbd",
+        "revCount": 43,
         "type": "git",
         "url": "file:./vendor/hermes-nicegui"
       },
