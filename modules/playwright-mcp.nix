@@ -6,9 +6,9 @@
 # process and provides stable lifecycle management across health checks.
 #
 # Design:
-#   * SYSTEMD SERVICE + SOCKET: the playwright-mcp process runs as a
-#     dedicated service with socket activation so it is always reachable on
-#     the MCP endpoint. State (cookies, cached browsers) lives in a
+#   * SYSTEMD SERVICE: the playwright-mcp process runs as a long-lived
+#     dedicated service so it keeps the browser and SSE session alive between
+#     client connections. State (cookies, cached browsers) lives in a
 #     RuntimeDirectory that is wiped on stop — no leakage between deploys.
 #   * LOOPBACK ONLY: binds 127.0.0.1 so only local consumers (hermes-agent)
 #     can reach it. No firewall rule needed.
@@ -54,21 +54,14 @@ in
       pkgs.playwright-mcp      # MCP server binary
     ];
 
-    # ── Socket activation ────────────────────────────────────────────────
-    # systemd.sockets.<name> auto-activates systemd.services.<name>.
-    systemd.sockets.playwright-mcp = {
-      description = "playwright-mcp MCP socket";
-      socketConfig.ListenStream = cfg.port;
-      wantedBy = [ "sockets.target" ];
-    };
-
     # ── The MCP service ──────────────────────────────────────────────────
+    # Run as a long-lived service (not socket-activated) so it keeps the
+    # browser and SSE session alive between client connections.
     systemd.services.playwright-mcp = {
       description = "Playwright MCP browser automation server";
-
-      # Must start after the socket is ready.
-      requires = [ "playwright-mcp.socket" ];
-      after = [ "playwright-mcp.socket" "hermes-agent.service" ];
+      wantedBy = [ "multi-user.target" ];
+      wants = [ "network-online.target" ];
+      after = [ "network-online.target" "hermes-agent.service" ];
 
       serviceConfig = {
         User = agent.user;
@@ -76,6 +69,7 @@ in
 
         # Browser cookies, cache, and profiles — wiped on stop.
         RuntimeDirectory = "playwright-mcp";
+        ReadWritePaths = runtimeStatePath;
 
         # Where to find Playwright-installed browsers.
         Environment = [
@@ -84,9 +78,9 @@ in
           "PLAYWRIGHT_MCP_USER_DATA_DIR=${runtimeStatePath}/firefox-profile"
         ];
 
-        ExecStart = "${pkgs.playwright-mcp}/bin/playwright-mcp";
+        ExecStart = "${pkgs.playwright-mcp}/bin/playwright-mcp --headless --host 127.0.0.1 --port ${toString cfg.port}";
 
-        Restart = "on-failure";
+        Restart = "always";
         RestartSec = 5;
 
         NoNewPrivileges = true;
