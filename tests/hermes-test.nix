@@ -85,20 +85,18 @@ pkgs.testers.runNixOSTest {
     machine.succeed("systemctl start hermes-rollback.service || true")
     machine.wait_until_succeeds(
         "! systemctl is-active --quiet hermes-rollback-run.service", timeout=120
-    )
-    machine.succeed("git -C /var/lib/hermes-deploy log --oneline -1 | grep -q 'gen 1'")
-    machine.succeed("! journalctl -u hermes-rollback-run --no-pager | grep -q 'command not found'")
+     )
+     machine.succeed("git -C /var/lib/hermes-deploy log --oneline -1 | grep -q 'gen 1'")
+     machine.succeed("! journalctl -u hermes-rollback-run --no-pager | grep -q 'command not found'")
 
-    # Manual deploy against a real local git repo (no remote): the git phase
-    # must run and commit the working tree on top of the current HEAD. Touch a
-    # file first so there is something to stage (the VM repoDir is empty).
-    # Same self-kill-hardened detachment as rollback above (hermes-deploy-run,
-    # --collect this time — it disappears once done, success or fail, which is
-    # exactly what "! is-active" below detects).
-    machine.succeed("touch /var/lib/hermes-deploy/.deploy-seed")
+     # Tag the rollback target as gen-1, then commit new content on top.
+     # The deploy script's idempotent check compares HEAD to gen-1, sees
+     # a mismatch, and proceeds to build+switch (instead of short-circuiting).
+     machine.succeed("git -C /var/lib/hermes-deploy tag -f gen-1")
+     machine.succeed("git -C /var/lib/hermes-deploy commit -q --allow-empty -m 'post-recovery content'")
     machine.succeed("systemctl start hermes-deploy.service || true")
     machine.wait_until_succeeds(
-        "! systemctl is-active --quiet hermes-deploy-run.service", timeout=300
+        "! systemctl is-active --quiet hermes-deploy.service", timeout=300
     )
     machine.succeed("git -C /var/lib/hermes-deploy log --oneline -2 | grep -q 'deploy'")
 

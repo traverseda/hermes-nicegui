@@ -208,10 +208,12 @@
 
   # ── Home Assistant platform (inbound, gateway-level) ────────────────
   # HA events/voice reach the agent through the gateway's homeassistant
-  # platform and route to the ha profile (ha-voice route), same as on the
-  # old box. Credentials come from hass-env via environmentFiles above.
+  # platform and route to the ha profile (ha-voice route). Credentials
+  # come from hass-env via environmentFiles above.
+  # Only the ha profile serves homeassistant — the default profile shares
+  # the same credentials and cannot (gateway rejects duplicate credentials).
   services.hermes-agent.settings = {
-    platforms.homeassistant.enabled = true;
+    platforms.homeassistant.enabled = false;
     # Discord platform (migrated 2026-08-15 from the deprecated bot on
     # hermes@hermesagent.lan). Token + allowed users + home channel live in
     # the hermes-env agenix secret (DISCORD_BOT_TOKEN / DISCORD_ALLOWED_USERS

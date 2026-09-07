@@ -111,7 +111,7 @@ if [[ "$DRY_RUN" == "true" ]]; then
 fi
 
 echo "== activating on $HOST =="
-ssh "$HOST" "nixos-rebuild switch --store-paths $STORE_PATH"
+ssh "$HOST" "$STORE_PATH/bin/switch-to-configuration switch 2>&1 | tee -a /var/log/hermes-deploy.log"
 
 echo "== activation complete =="
 
