@@ -19,6 +19,10 @@ let
       modules = [
         hermes-agent.nixosModules.default
         (import ./vm-configuration.nix)
+        ./../modules/hermes-tools.nix
+        {
+          services.hermes-tools.enable = true;
+        }
       ];
     }).config;
 
@@ -178,6 +182,8 @@ pkgs.runCommand "hermes-config-check"
     # OnFailure must be in [Unit] section (not [Service]): a misplaced
     # OnFailure in [Service] is silently ignored by systemd, which broke
     # recovery entirely (the agent crash would not trigger recovery).
+    # In the config-check the content lane IS enabled so content-recovery-run
+    # is the target. In the integration test VM it skips to rollback-run.
     ${need "OnFailure=hermes-content-recovery-run.service" "agent.unit"}
     # sudo (setuid wrapper) and system tools must be on the bot's service PATH.
     ${need "/run/wrappers" "agent.unit"}

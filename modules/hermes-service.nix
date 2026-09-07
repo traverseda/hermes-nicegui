@@ -198,12 +198,12 @@ in
     systemd.services.hermes-agent = {
       after = [ "network-online.target" ];
       wantedBy = [ "multi-user.target" ];
+      # OnFailure goes in [Unit], serviceConfig goes in [Service].
+      # When hermes-agent crashes, trigger content recovery → generation rollback.
+      onFailure = [ "hermes-content-recovery-run.service" ];
       serviceConfig = {
         NoNewPrivileges = lib.mkForce false;
         ProtectSystem = lib.mkForce false;
-        # OnFailure: agent crash triggers content recovery → content recovery
-        # failure escalates to Nix generation rollback.
-        OnFailure = [ "hermes-content-recovery-run.service" ];
       };
       # Restart the gateway when these markers change between generations.
       # Bumped for the Discord token migration (t_c5b70744): the deploy that
