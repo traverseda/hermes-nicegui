@@ -172,6 +172,11 @@ in
       };
       script = ''
         if [ -d ${contentDir}/.git ]; then
+          # flock prevents the deploy script from racing with a partial
+          # config.yaml snapshot mid-commit (shared git repo, exclusive lock).
+          # Auto-commit silently skips (non-blocking — non-fatal timer).
+          exec {lockfd}>/tmp/hermes-deploy-git.lock
+          flock -n $lockfd || { echo "[auto-commit] skipped: git lock busy" >&2; exit 0; }
           # Refresh the config.yaml snapshot BEFORE committing. Automatic
           # recovery no longer restores config.yaml (only an explicit
           # operator `hermes-tool revert --config` does), so the snapshot is

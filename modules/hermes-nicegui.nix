@@ -293,11 +293,10 @@ in
         Restart = "always";
         RestartSec = 5;
 
-        # If nicegui crashes, trigger content recovery first (cheap revert,
-        # no Nix rebuild). If that doesn't fix it, OnFailure escalates to
-        # a Nix generation rollback via hermes-rollback-run.service.
-        # Both hermes-agent and hermes-nicegui share this OnFailure chain.
-        OnFailure = "hermes-content-recovery-run.service";
+        # Nicegui is a thin UI; a crash is almost never a Nix config issue
+        # and should not trigger a generational rollback. Simple restart
+        # suffices — it just calls systemctl restart hermes-nicegui.
+        OnFailure = "hermes-nicegui-restart.service";
 
         # Same hardening as the other hermes units: shared state is
         # group-writable, no privilege escalation, no system writes outside

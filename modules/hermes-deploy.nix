@@ -77,9 +77,36 @@ let
   # Content-lane recovery hook: when the agent is unhealthy, try reverting the
   # fast-path content store (skills/tools/MCP registrations) BEFORE spending a
   # Nix generation. Set by modules/hermes-tools.nix; empty = no content lane.
-  contentRecoveryScript = lib.optionalString (cfg.contentRecovery != "") (
-    pkgs.writeShellScript "hermes-content-recovery" cfg.contentRecovery
+  # Always produces a valid script path (no-op when contentRecovery is empty)
+  # so it works as a string in ExecStart even when hermes-tools is disabled.
+  contentRecoveryScript = pkgs.writeShellScript "hermes-content-recovery" (
+    lib.optionalString (cfg.contentRecovery != "") cfg.contentRecovery
   );
+
+  # Recovery guard: validates that a viable rollback target exists before
+  # allowing the OnFailure chain to proceed. Prevents the chain from burning
+  # the last rollback target on an unrecoverable system.
+  #
+  # Checks (both must pass):
+  #   1. currentGeneration parses to a number ≥ 1 from the nix profile link
+  #   2. last-known-good exists AND is non-empty
+  #
+  # If any check fails: exits 0 with a clear log message. The unit stays
+  # active (RemainAfterExit=true) and does NOT trigger OnFailure escalation.
+  recoveryGuardScript = pkgs.writeShellScript "hermes-recovery-guard" ''
+    local current
+    current=$(readlink /nix/var/nix/profiles/system \
+      | sed -n 's/.*system-\([0-9][0-9]*\)-link$/\1/p')
+    if [ -z "$current" ] || [ "$current" -lt 1 ] 2>/dev/null; then
+      echo "recovery-guard: cannot parse current gen — no valid rollback target" >&2
+      exit 0
+    fi
+    if [ ! -f ${cfg.stateDir}/last-known-good ] || [ ! -s ${cfg.stateDir}/last-known-good ]; then
+      echo "recovery-guard: no last-known-good — recovery skipped" >&2
+      exit 0
+    fi
+    exit 0
+  '';
 
   # Roll back exactly one generation WITHOUT nixos-rebuild. nixos-rebuild's
   # `--rollback` self-locates by building itself from <nixpkgs/nixos>, which
@@ -135,7 +162,10 @@ let
         git -C ${cfg.repoDir} submodule update --init --recursive 2>/dev/null || true
         log "synced git ledger + vendor/ submodules to gen-$gen"
       else
-        log "WARNING: no gen-$gen tag recorded — git ledger and vendor/ checkouts were NOT moved and may not match the restored generation"
+        log "FATAL: no gen-$gen tag — git ledger/vendor/ NOT moved, only Nix rolled back"
+        log "Next deploy will re-package the newer source and re-propose broken config"
+        log "This unit MUST exit 1 to prevent permanent Nix-source misalignment"
+        exit 1
       fi
     }
   '';
@@ -151,10 +181,18 @@ let
     # bot commits directly here then rebuilds. Record any uncommitted edits in
     # the local ledger so the deploy is always a committed state (rollback
     # = git reset HEAD~1).
-    git -C ${cfg.repoDir} config user.name "hermes-deploy"
-    git -C ${cfg.repoDir} config user.email "hermes-deploy@localhost"
-    git -C ${cfg.repoDir} add -A
-    git -C ${cfg.repoDir} commit -q -m "deploy $(date -Is)" 2>/dev/null || true
+    # flock prevents the 15min auto-commit timer from writing a partial config
+    # snapshot mid-commit (race: both touch the same git repo).
+    (
+      flock -w 10 200 || exit 1
+      git -C ${cfg.repoDir} config user.name "hermes-deploy"
+      git -C ${cfg.repoDir} config user.email "hermes-deploy@localhost"
+      git -C ${cfg.repoDir} add -A
+      git -C ${cfg.repoDir} commit -q -m "deploy $(date -Is)" 2>/dev/null || true
+    ) 200>/tmp/hermes-deploy-git.lock
+    # Submodules sync outside the flock — git submodule update does not touch
+    # the same index file as add/commit, so it does not need the lock.
+    git -C ${cfg.repoDir} submodule update --init --recursive 2>/dev/null || true
     # Initialize any vendor/* submodule that has never been checked out on
     # this box (fresh clone / newly added submodule). Does NOT touch an
     # already-initialized submodule's checked-out commit — `git add -A` above
@@ -455,10 +493,13 @@ in
       path = [ config.system.path ];
       serviceConfig = {
         Type = "oneshot";
+        # Guard: validates rollback targets exist. If guard exits 0 (no target)
+        # → unit stays active, OnFailure doesn't fire. If guard exits 1
+        # (targets exist but recovery failed) → OnFailure to rollback-run.
+        ExecStartPre = recoveryGuardScript;
         ExecStart = contentRecoveryScript;
         RemainAfterExit = true;
         MemoryMax = cfg.switchMemoryMax;
-        # If content recovery doesn't fix it → generation rollback
         OnFailure = "hermes-rollback-run.service";
       };
     };
@@ -466,22 +507,55 @@ in
     # The actual rollback run as a oneshot (not a timer or watchdog):
     # Nix-level rollback + git sync. Runs automatically when OnFailure
     # fires from hermes-content-recovery-run or can be triggered manually.
+    # Guard: validates rollback targets exist before wasting a generation.
     systemd.services."hermes-rollback-run" = {
       description = "Nix generation rollback (runs when content recovery fails)";
       wantedBy = [ ];
       path = [ config.system.path ];
       serviceConfig = {
         Type = "oneshot";
+        ExecStartPre = recoveryGuardScript;
         ExecStart = rollbackScript;
         MemoryMax = cfg.switchMemoryMax;
       };
     };
 
+    # ── Simple nicegui restart — no Nix rollback for UI-only crashes ──
+    # Nicegui is a thin web frontend; a crash almost never indicates a Nix
+    # config problem. Rolling back a Nix generation for a nicegui-only bug
+    # wastes generations and may roll back a perfectly healthy agent.
+    systemd.services."hermes-nicegui-restart" = {
+      description = "Simple restart for hermes-nicegui crashes (no Nix rollback)";
+      wantedBy = [ ];
+      path = [ config.system.path ];
+      serviceConfig = {
+        Type = "oneshot";
+        ExecStart = pkgs.writeShellScript "hermes-nicegui-restart-script" ''
+          systemctl restart hermes-nicegui
+        '';
+      };
+    };
+
+    # ── OnFailure wiring overrides ──────────────────────────────────
+    # When contentRecovery IS enabled: hermes-agent → content-recovery-run
+    #   → rollback-run (full chain). When contentRecovery IS empty:
+    #   hermes-agent → rollback-run directly (skip empty-content step).
+    #   The default from hermes-service.nix (hermes-content-recovery-run)
+    #   stands when contentRecovery is non-empty; only overridden when
+    #   empty to prevent a no-op recovery from suppressing escalation.
+    systemd.services.hermes-agent.serviceConfig.OnFailure =
+      lib.mkIf (cfg.contentRecovery == "") (lib.mkForce "hermes-rollback-run.service");
+    # Nicegui always goes to hermes-nicegui-restart (UI crash, no Nix impact).
+    systemd.services.hermes-nicegui.serviceConfig.OnFailure =
+      "hermes-nicegui-restart.service";
+
     # Keep enough generations that rollback always has somewhere to go.
+    # Weekly GC with a 14-day window preserves at least two weeks of
+    # rollback history for a system that may create only 1-2 generations/day.
     nix.gc = {
       automatic = true;
-      dates = "daily";
-      options = "--delete-older-than 30d";
+      dates = "weekly";
+      options = "--delete-older-than 14d";
     };
 
     # git is a hard dependency of the deploy/rollback scripts and of
