@@ -35,7 +35,10 @@ let
   activation =
     pkgs.writeText "hermes-content-activation"
       (cfg.system.activationScripts."hermes-content-store".text or "");
-  deployScript = cfg.systemd.services."hermes-deploy".serviceConfig.ExecStart;
+  # Extract deploy script path from ExecStart ("/nix/store/setsid /nix/store/script >/dev/null ...")
+  # and use it in the test
+  deployScriptPath = lib.elemAt (lib.splitString " " cfg.systemd.services."hermes-deploy".serviceConfig.ExecStart) 1;
+  contentRecovery = cfg.services.hermes-deploy.contentRecovery;
   agentUnit = pkgs.writeText "hermes-agent.unit" cfg.systemd.units."hermes-agent.service".text;
 
   findBin = name: lib.findFirst (p: p.name == name) null cfg.environment.systemPackages;
@@ -55,14 +58,13 @@ let
 in
 pkgs.runCommand "tools-config-check"
   {
-    inherit activation deployScript agentUnit;
-    toolBinPath = if toolBin == null then "/nonexistent" else "${toolBin}/bin/hermes-tool";
-    agentHasTool = lib.boolToString agentHasTool;
-    contentRecovery = cfg.services.hermes-deploy.contentRecovery;
+  inherit activation deployScriptPath agentUnit contentRecovery;
+  toolBinPath = if toolBin == null then "/nonexistent" else "${toolBin}/bin/hermes-tool";
+  agentHasTool = lib.boolToString agentHasTool;
   }
   ''
     cat $activation > activation.script
-    cat $deployScript > deploy.script
+    cat "$deployScriptPath" > deploy.script
     cat $agentUnit > agent.unit
 
     # ── activation: git repo + content-good tag + skills symlink ────────

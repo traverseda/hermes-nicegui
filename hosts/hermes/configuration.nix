@@ -84,11 +84,6 @@
     repoDir = "/var/lib/hermes-deploy";
     flakeAttr = "hermes";
     branch = "main";
-    # Probe the actual public hostname, not just the local gateway process —
-    # a generation once shipped with no cloudflared unit and the tunnel
-    # 530'd for ~20min while the gateway itself stayed healthy the whole
-    # time. See modules/cloudflare-tunnel.nix / hermes-nicegui.nix for the
-    # same hostname.
   };
 
   # ── Opencode handled by modules/opencode.nix ─────────────────────

@@ -24,13 +24,8 @@
 #     the agent cannot brick itself in a way it cannot fix.
 #   * The live config.yaml is NEVER touched by automatic recovery. A snapshot
 #     of it lives in the store for an EXPLICIT operator revert
-#     (`hermes-tool revert --config`); the watchdog path (plain
-#     `hermes-tool revert`, services.hermes-deploy.contentRecovery) never
-#     restores it, so operator edits survive health-check failures.
-#   * The deploy watchdog runs `hermes-tool revert` as a cheap FIRST recovery
-#     attempt BEFORE falling back to a Nix generation rollback (see
-#     services.hermes-deploy.contentRecovery). Content failures are reverted
-#     at content granularity; only system failures cost a generation.
+#     (`hermes-tool revert --config`); the deploy watchdog never restores it,
+#     so operator edits survive health-check failures.
 #
 # Relationship to the system lane:
 #   * Nix still owns: the gateway unit, packages (extraPackages), the firewall,
@@ -149,13 +144,15 @@ in
     services.hermes-agent.extraPackages = [ hermesToolPackage ];
     environment.systemPackages = [ hermesToolPackage ];
 
+    # ── Content lane recovery hook for hermes-deploy ──────────────────
+    # When the deploy watchdog sees an unhealthy agent, try running
+    # `hermes-tool revert` to restore the last-known-good content store
+    # state BEFORE falling back to a Nix generation rollback.
+    services.hermes-deploy.contentRecovery = lib.mkDefault "${hermesToolPackage}/bin/hermes-tool revert";
+
     # ── Content bin is APPENDED to the gateway PATH (lowest precedence, so
     #    an agent-authored `git` can never shadow the system one). ──────
     systemd.services.hermes-agent.path = lib.mkAfter [ "${contentDir}/bin" ];
-
-    # ── Watchdog/deploy recovery hook: try content revert BEFORE a Nix
-    #    generation rollback. This option is read by modules/hermes-deploy.nix.
-    services.hermes-deploy.contentRecovery = lib.mkDefault "${hermesToolPackage}/bin/hermes-tool revert";
 
     # ── Periodic auto-commit (15min) so direct skill/bin edits are also
     #    captured in git, not just hermes-tool-mediated ones. ───────────

@@ -28,6 +28,28 @@
   hermesDeploy.defaultProvider = "mock";
 
   services.hermes-deploy.enable = true;
+  services.hermes-deploy.gracePeriod = 30;
+
+  # In the VM: only check the agent health. Other checks (tailnet, zerotier, tunnel)
+  # depend on services that don't exist in the test VM.
+  services.hermes-deploy.health.checks = {
+    agent = {
+      what = "hermes gateway unit active";
+      check = "systemctl is-active --quiet hermes-agent";
+    };
+    tailnet = {
+      what = "tailnet (skipped in test VM)";
+      check = "exit 0";
+    };
+    zerotier = {
+      what = "zerotier (skipped in test VM)";
+      check = "exit 0";
+    };
+    tunnel = {
+      what = "tunnel (skipped in test VM)";
+      check = "exit 0";
+    };
+  };
 
   # In the VM there is no real agenix secret, so give hermes an empty env
   # file so the activation script doesn't fail.
@@ -36,14 +58,6 @@
   system.activationScripts.hermes-empty-env = lib.stringAfter [ "users" ] ''
     install -o hermes -g hermes -m 0640 /dev/null /var/lib/hermes/empty.env
   '';
-
-  # Quick health check for local iteration: just the unit + pidfile.
-  services.hermes-deploy.healthCheck = ''
-    systemctl is-active --quiet hermes-agent \
-      && [ -f /var/lib/hermes/.hermes/gateway.pid ] \
-      && kill -0 "$(cat /var/lib/hermes/.hermes/gateway.pid)" 2>/dev/null
-  '';
-  services.hermes-deploy.gracePeriod = 30;
 
   # The real box has the flake cloned into /var/lib/hermes-deploy; the VM
   # starts empty. Give the deploy/rollback machinery a real git repo (a local

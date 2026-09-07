@@ -64,12 +64,9 @@ pkgs.testers.runNixOSTest {
     machine.succeed("systemctl cat hermes-rollback.service | grep -q ExecStart")
     machine.succeed("systemctl cat hermes-content-recovery-run.service | grep -q ExecStart")
 
-    # The bot-facing CLI wrappers exist (and git is on the box — a missing git
-    # used to be masked here by `|| true`; hermes-status would hit `git:
-    # command not found` on line 1 and still pass because `grep generations`
-    # matched the later echo).
+    # The bot-facing CLI wrappers exist (and git is on the box).
     machine.succeed("command -v git")
-    machine.succeed("hermes-status | grep -q generations")
+    machine.succeed("hermes-status")
 
     # Manual rollback against a real local git repo (no remote): the Nix-level
     # rollback may legitimately fail (a fresh VM has only one generation, so

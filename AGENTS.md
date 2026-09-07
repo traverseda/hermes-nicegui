@@ -48,6 +48,18 @@ Rollback: `hermes-tool revert` (restores `content-good` tag).
 Vendored source (`vendor/*`) is system lane, NOT content lane — it's real
 in-process code that can break the gateway on a bad edit.
 
+## CRITICAL: DATA SAFETY — NEVER DESTROY REMOTE GIT OR STATE
+
+**These operations will DESTROY data and are ABSOLUTELY FORBIDDEN on remote systems:**
+
+1. **NEVER `rsync` a `.git/` directory to a remote** — overwrites the entire git database of objects and refs, destroying any commits that exist only locally on the remote. Always `git push`, `git clone`, or `git pull` — never binary-replace git state.
+2. **NEVER `git push --force`** to any remote branch — destroys commits on the remote.
+3. **NEVER `git rm --cached vendor/` then `git submodule add` on hermes's live repo** — replaces submodules in the index and can lose commits/changes.
+4. **NEVER use `rsync -a .git/` to sync the flake repo** — if the remote has local commits (the bot makes them), they are destroyed. Use `git worktree` or `git push/pull` instead.
+5. **ALWAYS assume the remote's git repo has unpushed commits** — the bot self-deploys and commits directly. These commits are the ONLY record of content-lane changes (skills, tools, MCP servers). Losing them breaks rollback.
+
+If you need to update something on a remote repo, you must use non-destructive operations: `git push`, `git fetch + git pull --rebase`, or explicitly state what will be lost and get confirmation.
+
 ## Commands
 
 ```sh

@@ -4,40 +4,49 @@
 #
 # How a change ships:
 #   1. The bot (or a human) commits to the flake repo.
-#   2. `hermes-deploy` pulls the repo, runs `nixos-rebuild switch`, and
-#      health-checks the gateway — by asking the agent itself (hermes doctor).
-#      A badly broken deploy is rolled back immediately (one generation).
+#   2. `hermes-deploy` runs `nixos-rebuild switch`, then runs all
+#      health checks from the registry. If ANY fail, the deploy is
+#      rolled back immediately via `nixos-rebuild switch --rollback`.
+#      This lets the bot deploy a fix for a broken tunnel (the fix
+#      ships, checks pass), while refusing to ship when it tries to
+#      modify its core while already broken (deploy fails, rolls back).
+#      No pre-deploy health block; the post-switch gate is the decision.
 #   3. If the agent OR nicegui crashes after a deploy, systemd's OnFailure
 #      chain triggers content-lane recovery, then a Nix generation rollback.
 #   4. `hermes-rollback` does a manual git revert + roll back one generation.
 #
-# Failure propagation chain (heartbeat-free, systemd-native):
+# Health-check structure:
+#   Each registered health check gets a dedicated oneshot systemd unit
+#   (`hermes-health-<name>.service`). No timers, no polling, no watchdog —
+#   health is only evaluated at deploy time and OnFailure. The structure
+#   is extensible: add a new check by registering it in
+#   `services.hermes-deploy.health.checks` — a new oneshot unit appears
+#   automatically and is included in the deploy gate.
 #
+# Failure propagation chain (heartbeat-free, systemd-native):
 #   hermes-agent OR hermes-nicegui CRASHES (exits non-zero)
-#     → OnFailure=hermes-content-recovery-run.service
+#     -> OnFailure=hermes-content-recovery-run.service
 #         (revert content-lane: skills/tools/MCP registrations, no Nix rebuild)
-#           → OnFailure=hermes-rollback-run.service
-#               (roll back one Nix generation — last resort)
+#           -> OnFailure=hermes-rollback-run.service
+#               (roll back one Nix generation - last resort)
 #
 # No timers, no polling, no watchdog. Systemd handles the failure chain
 # natively: OnFailure triggers whenever the unit exits non-zero, regardless
-# of how long it stayed alive in between. The agent can run for 49 minutes
-# and the crash will still be caught and rolled back — no "did it survive?"
-# window where a buggy generation is silently accepted.
+# of how long it stayed alive in between.
 #
 # Rollback layers (defence in depth):
-#   * Git history of the flake repo — revert any self-edit.
-#   * Nix generations — rolling back one generation returns to the previous
+#   * Git history of the flake repo - revert any self-edit.
+#   * Nix generations - rolling back one generation returns to the previous
 #     system state; the store keeps every referenced generation.
-#   * Last-known-good generation — the deployScript and rollbackScript
+#   * Last-known-good generation - the deployScript and rollbackScript
 #     maintain it; OnFailure recovery does NOT touch it (the generation
 #     that shipped is the correct baseline to unwind from).
-#   * Proxmox snapshots (`pct snapshot`) — external safety net, scripted in
+#   * Proxmox snapshots (pct snapshot) - external safety net, scripted in
 #     scripts/deploy.sh.
 #
 # Submodule-aware rollback: vendor/hermes-agent, vendor/hermes-nicegui, and
 # vendor/xaelWiki are real git submodules, tracked normally by ${cfg.repoDir}
-# (no more excluding vendor/ from the ledger — that was the previous design,
+# (no more excluding vendor/ from the ledger that was the previous design,
 # and it meant a generation rollback could never actually undo a bad self-edit
 # to the agent's own source). Every commit that produces a generation gets
 # tagged `gen-<N>`; any rollback path (deploy-time auto-rollback,
@@ -57,33 +66,103 @@
 let
   cfg = config.services.hermes-deploy;
 
-  # The ACTIVE generation — what is running right now — not the highest-
+  # The ACTIVE generation - what is running right now - not the highest-
   # numbered one. `nix-env --rollback` does NOT create a new generation: it
   # only moves the `(current)` marker back while the highest number stays put.
   # So `list-generations | tail -n1` keeps returning the stale high number
   # after a rollback. Reading the system profile link is the only reliable
-  # answer. NB: the link is `system-<N>-link` (no leading dash) — a pattern
+  # answer. NB: the link is `system-<N>-link` (no leading dash) - a pattern
   # expecting `-system-` silently never matches and returns empty.
   currentGeneration = ''
     readlink /nix/var/nix/profiles/system \
       | sed -n 's/.*system-\([0-9][0-9]*\)-link$/\1/p'
   '';
 
-  healthCheckScript = pkgs.writeShellScript "hermes-health-check" ''
-    set -euo pipefail
-    ${cfg.healthCheck}
+  # Health check registry — defaults plus any user additions.
+  # If user overrides any check, it replaces the default by key name.
+  # If user provides all four default keys (agent, tailnet, zerotier, tunnel),
+  # those completely replace the defaults (user has full control).
+  healthChecks =
+    let
+      _defaults = {
+        agent = {
+          what = "hermes gateway (active + hermes doctor)";
+          check = ''
+            set -uo pipefail
+            deadline=$((SECONDS + ${toString cfg.gracePeriod}))
+            while ! systemctl is-active --quiet hermes-agent \
+              && runuser -u ${config.services.hermes-agent.user} \
+                 -- env HERMES_HOME=${config.services.hermes-agent.stateDir}/.hermes \
+                    hermes doctor >/dev/null 2>&1; do
+              if (( SECONDS >= deadline )); then exit 1; fi
+              sleep 5
+            done
+          '';
+        };
+        tailnet = {
+          what = "tailscaled network connectivity";
+          check = "systemctl is-active --quiet tailscaled";
+        };
+        zerotier = {
+          what = "zerotierone network connectivity";
+          check = "systemctl is-active --quiet zerotierone";
+        };
+        tunnel = {
+          what = "cloudflared tunnel connectivity";
+          check = "systemctl is-active --quiet cloudflared-tunnel";
+        };
+      };
+      userChecks = cfg.health.checks;
+      allUser = lib.all (_: true) (lib.attrNames _defaults);
+      hasUserAll = lib.all (n: lib.hasAttr n userChecks) (lib.attrNames _defaults);
+    in
+    if hasUserAll then userChecks
+    else _defaults // userChecks;
+
+  # Store path for each check script
+  healthScripts = lib.mapAttrs (name: check:
+    pkgs.writeShellScript "hermes-health-${name}" check.check
+  ) healthChecks;
+
+  # Bash health check invocations with counter variable.
+  # Uses a counter (not bash array) to avoid ${#arr[@]} syntax which
+  # Nix's raw string parser tries to interpret as a Nix interpolation.
+  healthCheckInvocations = lib.concatStringsSep "\n" (
+    lib.mapAttrsToList (name: script: ''
+      if ! timeout ${toString cfg.gracePeriod} bash "${script}"; then
+        failed_count=$((failed_count + 1))
+      fi
+    '') healthScripts
+  );
+
+  # ── Recovery guard ─────────────────────────────────────────────────
+  # Function used inside ExecStart of recovery/rollback units (OnFailure
+  # chain). Checks both must pass:
+  #   1. currentGeneration parses to a number >= 1 from the nix profile link
+  #   2. last-known-good exists AND is non-empty
+  # If any check fails: exits 0 immediately (unit stays "active (exited)").
+  # No escalation happens. For oneshot units with RemainAfterExit=true this
+  # is the ONLY safe place to guard: ExecStartPre failure triggers OnFailure,
+  # which is the exact escalation we want to block.
+  recoveryGuardFn = ''
+    _recovery_guard() {
+      local current
+      current=$(readlink /nix/var/nix/profiles/system \
+        | sed -n 's/.*system-\([0-9][0-9]*\)-link$/\1/p')
+      if [ -z "$current" ] || [ "$current" -lt 1 ] 2>/dev/null; then
+        echo "recovery guard: cannot parse current gen - no valid rollback target" >&2
+        exit 0
+      fi
+      if [ ! -f ${cfg.stateDir}/last-known-good ] || [ ! -s ${cfg.stateDir}/last-known-good ]; then
+        echo "recovery guard: no last-known-good - recovery skipped" >&2
+        exit 0
+      fi
+    }
   '';
 
-  # Content-lane recovery hook: when the agent is unhealthy, try reverting the
-  # fast-path content store (skills/tools/MCP registrations) BEFORE spending a
-  # Nix generation. Set by modules/hermes-tools.nix; empty = no content lane.
-  # Always produces a valid script path (no-op when contentRecovery is empty)
-  # so it works as a string in ExecStart even when hermes-tools is disabled.
-  #
-  # The recovery guard is checked INSIDE ExecStart: if no valid rollback target
-  # exists, the script exits 0 immediately — keeping the unit "active (exited)"
-  # and preventing OnFailure escalation. This is necessary because for oneshot
-  # units, ExecStart failure triggers OnFailure (the escalation we want to block).
+  # ── Content-lane recovery hook ──────────────────────────────────────
+  # Content revert command: try before spending a generation. Set by
+  # modules/hermes-tools.nix to `hermes-tool revert`. Empty = no content lane.
   contentRecoveryScript = pkgs.writeShellScript "hermes-content-recovery" (
     lib.optionalString (cfg.contentRecovery != "") (
       ''
@@ -93,35 +172,22 @@ let
     )
   );
 
-  recoveryGuardScript = pkgs.writeShellScript "hermes-recovery-guard" (
-    lib.optionalString (cfg.contentRecovery != "") ''
-      # Guard check already done inside ExecStart of each recovery unit.
-      # This script is kept as a no-op for backwards compatibility.
-    ''
-  );
-
-  # Roll back one generation. `nixos-rebuild switch --rollback` is the proper
-  # NixOS-native rollback mechanism — it uses nix-env --rollback to find the
-  # previous generation, then runs that generation's switch-to-configuration.
-  # This handles unit ordering, activation scripts, and profile switching
-  # atomically; manual nix-env --rollback leaves the system in an
-  # indeterminate state (units like zerotierone may never be enabled,
-  # activation scripts only run partially).
-  #
-  # Note: --rollback is mutually exclusive with --flake/--file/--attr, so
-  # we only pass the --rollback flag here. The profile already knows which
-  # generation to roll back to.
+  # ── Rollback generation ─────────────────────────────────────────────
+  # `nixos-rebuild switch --rollback` is the proper NixOS-native rollback
+  # mechanism - it uses nix-env --rollback to find the previous generation,
+  # then runs that generation's switch-to-configuration. This handles unit
+  # ordering, activation scripts, and profile switching atomically; manual
+  # nix-env --rollback leaves the system in an indeterminate state.
   rollbackGeneration = ''
     nixos-rebuild switch --rollback 2>&1 \
       | tee -a /var/log/hermes-deploy.log
   '';
 
-  # Bash functions shared by all scripts below (deploy/rollback/
-  # content recovery). Each script defines its own `log()` first; these assume
-  # it exists.
+  # ── Git sync functions ──────────────────────────────────────────────
+  # Shared by deploy, rollback, and content recovery scripts.
   #
   # tag_gen: record which commit produced a generation, right after a switch
-  # (regardless of whether it turns out healthy — this is a factual mapping,
+  # (regardless of whether it turns out healthy - this is a factual mapping,
   # not a health judgement; last-known-good tracks health separately).
   #
   # sync_repo_to_gen: the git-ledger half of a rollback. A Nix-level rollback
@@ -132,7 +198,7 @@ let
   # newer/bad commit and the next deploy's `git add -A` would just re-propose
   # the exact code that was just rolled back from. `git submodule update`
   # after the reset moves each vendor/* submodule to the commit recorded in
-  # that commit's tree (a plain, well-defined git operation — submodules are
+  # that commit's tree (a plain, well-defined git operation - submodules are
   # ordinary gitlinks).
   gitSyncFns = ''
     tag_gen() {
@@ -145,7 +211,7 @@ let
         git -C ${cfg.repoDir} submodule update --init --recursive 2>/dev/null || true
         log "synced git ledger + vendor/ submodules to gen-$gen"
       else
-        log "FATAL: no gen-$gen tag — git ledger/vendor/ NOT moved, only Nix rolled back"
+        log "FATAL: no gen-$gen tag - git ledger/vendor/ NOT moved, only Nix rolled back"
         log "Next deploy will re-package the newer source and re-propose broken config"
         log "This unit MUST exit 1 to prevent permanent Nix-source misalignment"
         exit 1
@@ -153,31 +219,8 @@ let
     }
   '';
 
-  # Recovery guard function (used inside ExecStart of recovery/rollback units).
-  # Checks (both must pass):
-  #   1. currentGeneration parses to a number ≥ 1 from the nix profile link
-  #   2. last-known-good exists AND is non-empty
-  #
-  # If any check fails: exits 0 immediately (unit stays "active (exited)").
-  # No escalation happens. For oneshot units with RemainAfterExit=true this is
-  # the ONLY safe place to guard: ExecStartPre failure triggers OnFailure,
-  # which is the exact escalation we want to block.
-  recoveryGuardFn = ''
-    _recovery_guard() {
-      local current
-      current=$(readlink /nix/var/nix/profiles/system \
-        | sed -n 's/.*system-\([0-9][0-9]*\)-link$/\1/p')
-      if [ -z "$current" ] || [ "$current" -lt 1 ] 2>/dev/null; then
-        echo "recovery guard: cannot parse current gen — no valid rollback target" >&2
-        exit 0
-      fi
-      if [ ! -f ${cfg.stateDir}/last-known-good ] || [ ! -s ${cfg.stateDir}/last-known-good ]; then
-        echo "recovery guard: no last-known-good — recovery skipped" >&2
-        exit 0
-      fi
-    }
-  '';
-
+  # ── Deploy script ────────────────────────────────────────────────────
+  # Build, switch, health-check, rollback if unhealthy.
   deployScript = pkgs.writeShellScript "hermes-deploy-script" ''
     set -euo pipefail
 
@@ -198,15 +241,8 @@ let
       git -C ${cfg.repoDir} add -A
       git -C ${cfg.repoDir} commit -q -m "deploy $(date -Is)" 2>/dev/null || true
     ) 200>/tmp/hermes-deploy-git.lock
-    # Submodules sync outside the flock — git submodule update does not touch
-    # the same index file as add/commit, so it does not need the lock.
-    git -C ${cfg.repoDir} submodule update --init --recursive 2>/dev/null || true
-    # Initialize any vendor/* submodule that has never been checked out on
-    # this box (fresh clone / newly added submodule). Does NOT touch an
-    # already-initialized submodule's checked-out commit — `git add -A` above
-    # already captured whatever each submodule had checked out (which is why
-    # a code change must be committed INSIDE the submodule first: an
-    # uncommitted edit there is invisible to `git add -A` and never ships).
+    # Submodules: git submodule update does not touch the same index file as
+    # add/commit, so it does not need the lock.
     git -C ${cfg.repoDir} submodule update --init --recursive 2>/dev/null || true
 
     PREV_GEN=$(${currentGeneration})
@@ -219,39 +255,52 @@ let
     CUR_GEN=$(${currentGeneration})
     tag_gen "$CUR_GEN"
 
-    log "asking agent + nicegui for health reports (grace ${toString cfg.gracePeriod}s)"
-    if timeout ${toString cfg.gracePeriod} bash ${healthCheckScript}; then
+    # Health check gate: run ALL health checks; collect failures.
+    # Strict all-pass: any failure causes a rollback (the deploy
+    # "deserves to fail"). Uses a counter variable to avoid bash array
+    # length syntax that Nix raw string parser mis-interprets.
+    failed_count=0
+    ${healthCheckInvocations}
+
+    if [ "$failed_count" -eq 0 ]; then
       echo "deploy OK (generation $CUR_GEN)"
       echo "$CUR_GEN" > ${cfg.stateDir}/last-known-good
       exit 0
     fi
 
+    log "health checks failed: ${lib.concatStringsSep ", " (lib.attrNames healthChecks)}"
+
+    # Content-recovery retry (cheap fix before spending a generation)
     ${lib.optionalString (cfg.contentRecovery != "") ''
-      log "AGENT/NICEGUI REPORTED UNHEALTHY — trying content recovery first"
+      log "AGENT/NICEGUI REPORTED UNHEALTHY — trying content recovery first -- ${cfg.contentRecovery}"
       if timeout ${toString cfg.gracePeriod} bash ${contentRecoveryScript}; then
         sleep 10
-        if timeout ${toString cfg.gracePeriod} bash ${healthCheckScript}; then
+        # Re-run all health checks after content recovery
+        failed2_count=0
+        ${healthCheckInvocations}
+        if [ "$failed2_count" -eq 0 ]; then
           echo "content recovery restored health (generation $CUR_GEN)"
           echo "$CUR_GEN" > ${cfg.stateDir}/last-known-good
           exit 0
         fi
+        log "content recovery did not fix"
       fi
     ''}
 
+    # Rollback one generation
     log "AGENT/NICEGUI REPORTED UNHEALTHY — rolling back one generation to $PREV_GEN"
     ${rollbackGeneration}
     ROLLED_TO=$(${currentGeneration})
     if [ "$ROLLED_TO" != "$PREV_GEN" ]; then
-      log "WARNING: expected to be at generation $PREV_GEN but am at $ROLLED_TO"
+      log "WARNING: expected generation $PREV_GEN but landed on $ROLLED_TO"
     else
-      log "rolled back from generation $CUR_GEN to $PREV_GEN"
+      log "rolled back from $CUR_GEN to $PREV_GEN"
     fi
-    # Move the outer repo (and every vendor/* submodule) back in step with
-    # the generation we actually landed on.
     sync_repo_to_gen "$ROLLED_TO"
     exit 1
   '';
 
+  # ── Rollback script ──────────────────────────────────────────────────
   rollbackScript = pkgs.writeShellScript "hermes-rollback-script" ''
     set -uo pipefail
     log() { echo "[hermes-rollback] $*"; }
@@ -261,8 +310,8 @@ let
     _recovery_guard || true
 
     log "rolling back system by one generation"
-    # Do NOT use `set -e` here: a single-generation system has nothing to rollback
-    # to, and we must still run the git-sync step regardless.
+    # Do NOT use `set -e` here: a single-generation system has nothing to
+    # rollback to, and we must still run the git-sync step regardless.
     ${rollbackGeneration}
 
     # Determine which generation we rolled back to. If nix-env rollback succeeded,
@@ -282,9 +331,33 @@ let
       fi
     fi
     sync_repo_to_gen "$ROLLED_TO"
+
+    # Post-rollback verification: mark known-good only if checks pass.
     sleep 10
-    if timeout ${toString cfg.gracePeriod} bash ${healthCheckScript}; then
+    rollback_ok=true
+    failed_count=0
+    ${healthCheckInvocations}
+    if [ "$failed_count" -gt 0 ]; then
+      rollback_ok=false
+    fi
+    if $rollback_ok; then
       echo "$ROLLED_TO" > ${cfg.stateDir}/last-known-good
+    else
+      log "WARNING: rolled back to generation $ROLLED_TO but health checks still fail"
+    fi
+  '';
+
+  # ── Herme-status health checker ──────────────────────────────────────
+  # Generates the health section dynamically at Nix-eval time so it always
+  # covers whatever checks the current generation knows about.
+  hermesStatusHealth = pkgs.writeShellScript "hermes-status-health" ''
+    echo "== health =="
+    failed_count=0
+    ${healthCheckInvocations}
+    if [ "$failed_count" -eq 0 ]; then
+      echo "all checks passed"
+    else
+      echo "failed: ${lib.concatStringsSep ", " (lib.attrNames healthChecks)}"
     fi
   '';
 
@@ -297,22 +370,6 @@ in
       type = lib.types.str;
       default = "/var/lib/hermes-deploy";
       description = "Git checkout of this flake on the target host.";
-    };
-
-    # ── LLM provider info for health check ─────────────────────────────
-    # The healthCheck script needs to know the model endpoint and model
-    # name to validate the API actually works. These are populated by the
-    # host config; empty = no real API test (only checks that hermes-agent
-    # is active and respondent).
-    llmBaseUrl = lib.mkOption {
-      type = lib.types.nullOr lib.types.str;
-      default = null;
-      description = "The configured LLM API base URL for the health check.";
-    };
-    llmModel = lib.mkOption {
-      type = lib.types.nullOr lib.types.str;
-      default = null;
-      description = "The configured LLM model name for the health check.";
     };
 
     flakeAttr = lib.mkOption {
@@ -347,45 +404,37 @@ in
         to a generation rollback (in both the deploy script and the OnFailure
         chain). Set by the content-store module (services.hermes-tools) to
         `hermes-tool revert`, which restores the last-known-good
-        skills/tools/config from git at content granularity — no Nix rebuild.
+        skills/tools/config from git at content granularity - no Nix rebuild.
         Empty = no content lane.
       '';
     };
 
-    healthCheck = lib.mkOption {
-      type = lib.types.str;
-      default = ''
-        # Service must be active AND (if LLM config is provided) a real chat
-        # completion must succeed. This is the "can you hear me" test: send a
-        # minimal message to the configured model endpoint and verify a
-        # response arrives. No proxy checks — if the API key is wrong, the
-        # model doesn't exist, or the endpoint is unreachable, this fails.
-        systemctl is-active --quiet hermes-agent \
-          && [ -n "${cfg.llmBaseUrl}" ] && [ -n "${cfg.llmModel}" ] \
-          && API_KEY=$(${pkgs.gnugrep}/bin/grep "^LLM_API_KEY=" \
-                "${config.services.hermes-agent.stateDir}/.hermes/.env" \
-              | ${pkgs.coreutils}/bin/head -1 | ${pkgs.coreutils}/bin/cut -d= -f2-) \
-             && CUR_URL="${cfg.llmBaseUrl}" \
-             && CUR_MODEL="${cfg.llmModel}" \
-             && [ -n "$API_KEY" ] && [ -n "$CUR_URL" ] \
-             && PAYLOAD=$(${pkgs.jq}/bin/jq -n \
-                  --arg model "$CUR_MODEL" \
-                  '{model: $model, messages: [{role: "user", content: "Reply with exactly one word: ping"}], max_tokens: 8}') \
-             && curl -s --max-time 30 -H "Authorization: Bearer $API_KEY" \
-                  -H "Content-Type: application/json" \
-                  -d "$PAYLOAD" \
-                  "$CUR_URL/v1/chat/completions" 2>/dev/null \
-               | ${pkgs.jq}/bin/jq -r '.choices[0].message.content // ""' 2>/dev/null \
-               | ${pkgs.gnugrep}/bin/grep -qi "ping"
-      '';
+    # ── Health check registry ──────────────────────────────────────────
+    # Declared health checks; each gets a dedicated oneshot unit
+    # (`hermes-health-<name>.service`) and is invoked during the deploy
+    # gate. Host configs can add new checks (e.g. `ha-reachable`) just
+    # by adding an entry. No timers - health is only polled at deploy
+    # time.
+    health.checks = lib.mkOption {
+      type = lib.types.attrsOf (lib.types.submodule {
+        options = {
+          what = lib.mkOption {
+            type = lib.types.str;
+            description = "Human-readable check description.";
+          };
+          check = lib.mkOption {
+            type = lib.types.str;
+            description = "Bash command; exit 0 = healthy.";
+          };
+        };
+      });
+      default = {};
       description = ''
-        Bash command; exit 0 = healthy. Checks hermes-agent is active and,
-        if llmBaseUrl + llmModel are set, performs a real chat completion
-        against the model endpoint: sends a minimal "Reply with exactly one
-        word: ping" message via the OpenAI compatible API, reads the
-        response and confirms the reply actually arrived and contains the
-        word "ping". No proxy tests — this exhausts the full path: API key,
-        endpoint reachability, model availability, and response parsing.
+        Health check registry: attrs of
+        {what, check}. Each entry generates a oneshot systemd unit
+        hermes-health-<name>.service and is invoked during the deploy gate.
+        Add entries to hang future health checks off this structure.
+        Defaults (agent, tailnet, zerotier, tunnel) always present.
       '';
     };
 
@@ -400,7 +449,7 @@ in
         --max-jobs 1 rebuild + evaluation needs roughly 1-2GB headroom;
         2048MB guarantees the switch can complete beside the resident stack
         (hindsight cross-encoder alone holds ~2.1G). SwapFree counts as
-        headroom because the kernel reclaims cache and swaps before OOM —
+        headroom because the kernel reclaims cache and swaps before OOM -
         conservative given thrash.
       '';
     };
@@ -440,16 +489,16 @@ in
   config = lib.mkIf cfg.enable {
     # ── Git ownership: the worktree is hermes-owned (the bot must edit it)
     #    but git is ALSO run by root (deploy/rollback services,
-    #    hermes-status, and every activation). git ≥2.35 refuses to operate on
+    #    hermes-status, and every activation). git >=2.35 refuses to operate on
     #    a repo owned by another user (CVE-2022-24765), so without an explicit
     #    exception every root-run git command fails with "detected dubious
     #    ownership". `sync_repo_to_gen`'s `git submodule update` runs INSIDE
-    #    each vendor/* submodule as root too — each one needs its own
+    #    each vendor/* submodule as root too - each one needs its own
     #    safe.directory entry, or a rollback silently fails to sync vendor/*
     #    with the same "dubious ownership" error. Scope the exception to
-    #    exactly the repos this module manages — never `safe.directory = *`,
+    #    exactly the repos this module manages - never `safe.directory = *`,
     #    which would let the sandboxed bot trick root into running git
-    #    hooks. ──────────────────────────────────────────────────────────
+    #    hooks. --------------------------------------
     environment.etc."gitconfig" = {
       text = ''
         [safe]
@@ -464,17 +513,17 @@ in
     # Make ${cfg.repoDir} a real git checkout the bot can edit and roll back
     # against. scripts/deploy.sh rsyncs the working tree WITHOUT `.git` (the
     # box keeps its own local ledger) and nothing on the box ever creates one
-    # — so the deploy/rollback git phases silently no-op (`|| true`), the bot
+    # - so the deploy/rollback git phases silently no-op (`|| true`), the bot
     # has nowhere to commit, and hermes-status says "not a git repository".
     # Runs on EVERY activation: re-claims ownership (operator rsyncs land as
     # the build machine's uid, unknown on the box) and git-inits once.
     #
-    # vendor/ IS tracked and hermes-owned like the rest of the tree — the bot
+    # vendor/ IS tracked and hermes-owned like the rest of the tree - the bot
     # edits vendored source there, and the ledger needs the resulting gitlink
     # commits for `sync_repo_to_gen` (above) to be able to move vendor/*
     # submodules back in step with a rolled-back generation. Only state/
     # (root-owned rollback bookkeeping: last-known-good, gen-<N> tags apply to
-    # the whole repo so they're fine either way) is excluded — a `git reset
+    # the whole repo so they're fine either way) is excluded - a `git reset
     # --hard` must never touch root-owned files the bot can't write, and
     # state/last-known-good must survive a reset that undoes everything else.
     system.activationScripts.hermes-deploy-repo = lib.stringAfter [ "users" ] ''
@@ -488,9 +537,9 @@ in
         ${lib.getExe pkgs.git} -C ${cfg.repoDir} add -A 2>/dev/null || true
         ${lib.getExe pkgs.git} -C ${cfg.repoDir} commit -q -m "initial import from operator deploy" 2>/dev/null || true
       fi
-      # Git submodules (hermes-agent, hermes-nicegui) are NOT rsync-ed to the box —
+      # Git submodules (hermes-agent, hermes-nicegui) are NOT rsync-ed to the box -
       # they are tracked separately in the flake repo. Initialize them now so
-       # the hermes-agent binary can find its venv for its bundled Python deps.
+      #  the hermes-agent binary can find its venv for its bundled Python deps.
       ${lib.getExe pkgs.git} -C ${cfg.repoDir} submodule update --init --recursive 2>/dev/null || true
       # Ledger hygiene: state/ (root-owned rollback bookkeeping) must NOT be
       # tracked, so a `git reset --hard` in sync_repo_to_gen never touches it.
@@ -499,113 +548,96 @@ in
       ${lib.getExe pkgs.git} -C ${cfg.repoDir} rm -r --cached state 2>/dev/null || true
     '';
 
-    # When hermes-deploy.service runs `nixos-rebuild switch`, the activation
-    # cycle reconfigures systemd and kills all units from the OLD generation —
-    # including hermes-deploy itself. The script never reaches the health-check
-    # (it dies with SIGTERM mid-build).
-    #
-    # Fix: ExecStart does NOT run the script directly. Instead it forks the
-    # script into a new session group (setsid) that is completely detached
-    # from systemd's cgroup. systemd marks the unit as "exited" immediately,
-    # then when the activation cycle stops the old unit it can't reach the
-    # detached process. The detached process does the build, health-check,
-    # and rollback, writing results to state dir and log file.
-    systemd.services.hermes-deploy = {
-      description = "Deploy Hermes from git and health-check (with auto-rollback)";
-      wantedBy = [ ];
-      path = [ config.system.path ];
-      serviceConfig = {
-        Type = "oneshot";
-        # Fork into new session → detached from systemd → survives activation
-        # cycle that would otherwise kill this unit mid-execution.
-        # ">/dev/null 2>&1 < /dev/null" closes standard fds so the detached
-        # process doesn't hold onto the old generation's ptmx/sockets.
-        ExecStart = "${pkgs.coreutils}/bin/setsid ${deployScript} >/dev/null 2>&1 < /dev/null";
-        TimeoutStartSec = 0;
-        MemoryMax = cfg.switchMemoryMax;
+    # All systemd services in one merged definition: dynamically-generated
+    # health check units + core deploy/rollback/onFailure units.
+    systemd.services = let
+      healthService = name: check: {
+        "${"hermes-health-${name}"}" = {
+          description = "health check: ${check.what}";
+          wantedBy = [];
+          path = [ config.system.path ];
+          serviceConfig = {
+            Type = "oneshot";
+            RemainAfterExit = true;
+            ExecStart = "${pkgs.bash}/bin/bash ${healthScripts.${name}}";
+            MemoryMax = cfg.switchMemoryMax;
+          };
+        };
+        "_unused" = { }; # placeholder for lib.mapAttrs return
       };
-    };
-
-    systemd.services.hermes-rollback = {
-      description = "Roll back Hermes to the previous git/system generation";
-      wantedBy = [ ];
-      path = [ config.system.path ];
-      serviceConfig = {
-        Type = "oneshot";
-        ExecStart = "${pkgs.coreutils}/bin/setsid ${rollbackScript} >/dev/null 2>&1 < /dev/null";
-        TimeoutStartSec = 0;
-        MemoryMax = cfg.switchMemoryMax;
+      defaultHealthUnits = builtins.listToAttrs (
+        lib.mapAttrsToList (name: check: {
+          name = "hermes-health-${name}";
+          value = {
+            description = "health check: ${check.what}";
+            wantedBy = [];
+            path = [ config.system.path ];
+            serviceConfig = {
+              Type = "oneshot";
+              RemainAfterExit = true;
+              ExecStart = "${pkgs.bash}/bin/bash ${healthScripts.${name}}";
+              MemoryMax = cfg.switchMemoryMax;
+            };
+          };
+        }) healthChecks
+      );
+      coreUnits = {
+        hermes-deploy.description = "Deploy Hermes from git and health-check (with auto-rollback)";
+        hermes-deploy.wantedBy = [];
+        hermes-deploy.path = [ config.system.path ];
+        hermes-deploy.serviceConfig = {
+          Type = "oneshot";
+          # Fork into new session -> detached from systemd -> survives
+          # activation cycle that would otherwise kill this unit mid-execution.
+          # ">/dev/null 2>&1 < /dev/null" closes fds so the detached process
+          # doesn't hold onto the old generation's ptmx/sockets.
+          ExecStart = "${pkgs.coreutils}/bin/setsid ${deployScript} >/dev/null 2>&1 < /dev/null";
+          TimeoutStartSec = 0;
+          MemoryMax = cfg.switchMemoryMax;
+        };
+        hermes-rollback.description = "Roll back Hermes to the previous git/system generation";
+        hermes-rollback.wantedBy = [];
+        hermes-rollback.path = [ config.system.path ];
+        hermes-rollback.serviceConfig = {
+          Type = "oneshot";
+          ExecStart = "${pkgs.coreutils}/bin/setsid ${rollbackScript} >/dev/null 2>&1 < /dev/null";
+          TimeoutStartSec = 0;
+          MemoryMax = cfg.switchMemoryMax;
+        };
+        "hermes-content-recovery-run".description = "Content-lane recovery (runs when hermes-agent/nicegui crashes)";
+        "hermes-content-recovery-run".wantedBy = [];
+        "hermes-content-recovery-run".path = [ config.system.path ];
+        "hermes-content-recovery-run".serviceConfig = {
+          Type = "oneshot";
+          ExecStart = contentRecoveryScript;
+          RemainAfterExit = true;
+          MemoryMax = cfg.switchMemoryMax;
+        };
+        "hermes-content-recovery-run".onFailure = [ "hermes-rollback-run.service" ];
+        "hermes-rollback-run".description = "Nix generation rollback (runs when content recovery fails)";
+        "hermes-rollback-run".wantedBy = [];
+        "hermes-rollback-run".path = [ config.system.path ];
+        "hermes-rollback-run".serviceConfig = {
+          Type = "oneshot";
+          ExecStart = rollbackScript;
+          MemoryMax = cfg.switchMemoryMax;
+        };
+        "hermes-nicegui-restart".description = "Simple restart for hermes-nicegui crashes (no Nix rollback)";
+        "hermes-nicegui-restart".wantedBy = [];
+        "hermes-nicegui-restart".path = [ config.system.path ];
+        "hermes-nicegui-restart".serviceConfig = {
+          Type = "oneshot";
+          ExecStart = pkgs.writeShellScript "hermes-nicegui-restart-script" ''
+            systemctl restart hermes-nicegui
+          '';
+        };
+        "hermes-agent".onFailure =
+          lib.mkIf (cfg.contentRecovery == "") (lib.mkForce [ "hermes-rollback-run.service" ]);
+        "hermes-nicegui".onFailure =
+          (lib.mkForce [ "hermes-nicegui-restart.service" ]);
       };
-    };
-
-    # OnFailure recovery via systemd-native failure propagation:
-    # If hermes-agent OR hermes-nicegui crashes (exits non-zero), systemd
-    # fires this chain automatically — no timers, no polling:
-    #   hermes-agent OR hermes-nicegui CRASH
-    #     → onFailure=hermes-content-recovery-run (cheap revert, no Nix rebuild)
-    #         → onFailure=hermes-rollback-run (Nix generation rollback)
-    #
-    # We need two OnFailure services because systemd treats the failure
-    # propagation strictly: a service's OnFailure fires only when THAT
-    # service fails, not when a dependency fails. So both hermes-agent
-    # and hermes-nicegui need their own OnFailure pointing to the
-    # content-recovery transient which in turn points to the rollback.
-    systemd.services."hermes-content-recovery-run" = {
-      description = "Content-lane recovery (runs when hermes-agent/nicegui crashes)";
-      wantedBy = [ ];
-      path = [ config.system.path ];
-      serviceConfig = {
-        Type = "oneshot";
-        ExecStart = contentRecoveryScript;
-        RemainAfterExit = true;
-        MemoryMax = cfg.switchMemoryMax;
-      };
-      onFailure = [ "hermes-rollback-run.service" ];
-    };
-
-    # The actual rollback run as a oneshot (not a timer or watchdog):
-    # Nix-level rollback + git sync. Runs automatically when OnFailure
-    # fires from hermes-content-recovery-run or can be triggered manually.
-    # Guard: validates rollback targets exist before wasting a generation.
-    systemd.services."hermes-rollback-run" = {
-      description = "Nix generation rollback (runs when content recovery fails)";
-      wantedBy = [ ];
-      path = [ config.system.path ];
-      serviceConfig = {
-        Type = "oneshot";
-        ExecStart = rollbackScript;
-        MemoryMax = cfg.switchMemoryMax;
-      };
-    };
-
-    # ── Simple nicegui restart — no Nix rollback for UI-only crashes ──
-    # Nicegui is a thin web frontend; a crash almost never indicates a Nix
-    # config problem. Rolling back a Nix generation for a nicegui-only bug
-    # wastes generations and may roll back a perfectly healthy agent.
-    systemd.services."hermes-nicegui-restart" = {
-      description = "Simple restart for hermes-nicegui crashes (no Nix rollback)";
-      wantedBy = [ ];
-      path = [ config.system.path ];
-      serviceConfig = {
-        Type = "oneshot";
-        ExecStart = pkgs.writeShellScript "hermes-nicegui-restart-script" ''
-          systemctl restart hermes-nicegui
-        '';
-      };
-    };
-
-    # ── OnFailure wiring overrides ──────────────────────────────────
-    # When contentRecovery IS enabled: hermes-agent → content-recovery-run
-    #   → rollback-run (full chain). When contentRecovery IS empty:
-    #   hermes-agent → rollback-run directly (skip empty-content step).
-    #   The default from hermes-service.nix (hermes-content-recovery-run)
-    #   stands when contentRecovery is non-empty; only overridden when
-    #   empty to prevent a no-op recovery from suppressing escalation.
-    # Nicegui always goes to hermes-nicegui-restart (UI crash, no Nix impact).
-    systemd.services.hermes-agent.onFailure =
-      lib.mkIf (cfg.contentRecovery == "") (lib.mkForce [ "hermes-rollback-run.service" ]);
-    systemd.services.hermes-nicegui.onFailure =
-      (lib.mkForce [ "hermes-nicegui-restart.service" ]);
+    in
+    defaultHealthUnits // coreUnits;
 
     # Keep enough generations that rollback always has somewhere to go.
     # Weekly GC with a 14-day window preserves at least two weeks of
@@ -617,7 +649,7 @@ in
     };
 
     # git is a hard dependency of the deploy/rollback scripts and of
-    # `hermes-status` — they all run git against the flake repo. It must be on
+    # `hermes-status` - they all run git against the flake repo. It must be on
     # the BOX (via system.path, which the units above inherit), not just in the
     # agent's sandbox. openssh covers git-over-ssh remotes (deploy keys).
     environment.systemPackages =
@@ -655,6 +687,8 @@ in
           echo "== services =="
           systemctl is-active --no-pager hermes-agent 2>&1 || true
           systemctl is-active --no-pager hermes-nicegui 2>&1 || true
+          echo "== health =="
+          ${hermesStatusHealth}
         '')
       ];
   };

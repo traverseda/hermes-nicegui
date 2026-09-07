@@ -26,14 +26,13 @@ let
       ];
     }).config;
 
-  # deploy/rollback ExecStart is now `systemd-run --unit=... ... <script>`
-  # (self-kill hardening: the whole thing runs as a detached transient) —
-  # the actual script path is the last whitespace-separated token.
-  lastWord = s: lib.last (lib.splitString " " s);
+  # After the setsid detachment change, ExecStart is:
+  # "/nix/store/setsid /nix/store/script >/dev/null 2>&1 < /dev/null"
+  # The deploy/rollback script path is the second whitespace-separated token.
+  secondWord = s: lib.elemAt (lib.splitString " " s) 1;
 
-  # Generated artifacts to assert on (store paths / small strings).
-  deployScript = lastWord cfg.systemd.services."hermes-deploy".serviceConfig.ExecStart;
-  rollbackScript = lastWord cfg.systemd.services."hermes-rollback".serviceConfig.ExecStart;
+  deployScript = secondWord cfg.systemd.services."hermes-deploy".serviceConfig.ExecStart;
+  rollbackScript = secondWord cfg.systemd.services."hermes-rollback".serviceConfig.ExecStart;
   deployUnit = pkgs.writeText "hermes-deploy.unit" cfg.systemd.units."hermes-deploy.service".text;
   rollbackUnit =
     pkgs.writeText "hermes-rollback.unit"
@@ -110,8 +109,7 @@ pkgs.runCommand "hermes-config-check"
     ${need "nixos-rebuild switch" "deploy.script"}
     ${need "AGENT/NICEGUI REPORTED UNHEALTHY" "deploy.script"}
     ${need "last-known-good" "deploy.script"}
-    ${need "nix-env -p /nix/var/nix/profiles/system --rollback" "rollback.script"}
-    ${need "switch-to-configuration switch" "rollback.script"}
+    ${need "nixos-rebuild switch --rollback" "rollback.script"}
     ${need "last-known-good" "rollback.script"}
     ${need "rolling back system by one generation" "rollback.script"}
 
