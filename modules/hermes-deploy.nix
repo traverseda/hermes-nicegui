@@ -248,6 +248,19 @@ let
     PREV_GEN=$(${currentGeneration})
     log "previous generation: $PREV_GEN"
 
+    # Pre-deploy validation: fail fast on eval errors, vendor narHash drift,
+    # or syntax mistakes instead of wasting time building and then failing.
+    # This is the critical step — vendor edits that forget `nix flake lock`
+    # will get caught here with a clear error message.
+    log "pre-deploy validation (flake check --no-build)"
+    if ! nix flake check --no-build "$cfg.repoDir" 2>&1 | tee -a /var/log/hermes-deploy.log; then
+      log "pre-deploy validation FAILED — aborting deploy"
+      log "Run 'nix flake check --no-build' to see the full error."
+      log "Common fix: cd vendor/<submodule> && git add -A && git commit -q -m 'fix: <msg>' && nix flake lock --update-input <input>"
+      exit 1
+    fi
+    log "validation passed"
+
     log "building & switching generation (max-jobs ${toString cfg.maxJobs}, cores ${toString cfg.cores})"
     nixos-rebuild switch --max-jobs ${toString cfg.maxJobs} --cores ${toString cfg.cores} --flake "${cfg.repoDir}#${cfg.flakeAttr}" 2>&1 \
       | tee -a /var/log/hermes-deploy.log
