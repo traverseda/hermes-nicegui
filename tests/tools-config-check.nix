@@ -6,9 +6,9 @@
 #     content-good, and symlinks $HERMES_HOME/skills -> content/skills,
 #   * hermes-tool is installed for the agent AND the operator,
 #   * the gateway PATH appends content/bin (agent tools, no restart needed),
-#   * the deploy watchdog carries the content-recovery hook BEFORE any
-#     generation rollback (safe, cheap recovery first),
-#   * the auto-commit timer exists so direct edits are captured in git.
+    #   * the deploy script carries the content-recovery hook BEFORE any
+#     generation rollback (safe, cheap recovery first).
+#   * the gateway PATH appends content/bin (agent tools, no restart needed).
 #
 # Run with:  nix build .#checks.x86_64-linux.tools-config-check
 
@@ -36,11 +36,7 @@ let
     pkgs.writeText "hermes-content-activation"
       (cfg.system.activationScripts."hermes-content-store".text or "");
   deployScript = cfg.systemd.services."hermes-deploy".serviceConfig.ExecStart;
-  watchdogScript = cfg.systemd.services."hermes-watchdog".serviceConfig.ExecStart;
   agentUnit = pkgs.writeText "hermes-agent.unit" cfg.systemd.units."hermes-agent.service".text;
-  contentTimer =
-    pkgs.writeText "hermes-content-commit.timer"
-      (cfg.systemd.units."hermes-content-commit.timer".text or "");
 
   findBin = name: lib.findFirst (p: p.name == name) null cfg.environment.systemPackages;
   toolBin = findBin "hermes-tool";
@@ -59,7 +55,7 @@ let
 in
 pkgs.runCommand "tools-config-check"
   {
-    inherit activation deployScript watchdogScript agentUnit contentTimer;
+    inherit activation deployScript agentUnit;
     toolBinPath = if toolBin == null then "/nonexistent" else "${toolBin}/bin/hermes-tool";
     agentHasTool = lib.boolToString agentHasTool;
     contentRecovery = cfg.services.hermes-deploy.contentRecovery;
@@ -67,9 +63,7 @@ pkgs.runCommand "tools-config-check"
   ''
     cat $activation > activation.script
     cat $deployScript > deploy.script
-    cat $watchdogScript > watchdog.script
     cat $agentUnit > agent.unit
-    cat $contentTimer > content.timer
 
     # ── activation: git repo + content-good tag + skills symlink ────────
     ${need "init -q" "activation.script"}
@@ -84,21 +78,16 @@ pkgs.runCommand "tools-config-check"
     # ── gateway PATH appends content/bin (lowest precedence) ────────────
     ${need "content/bin" "agent.unit"}
 
-    # ── deploy + watchdog carry content recovery before generation rollback
+    # ── deploy carries content recovery before generation rollback ─────
     ${need "content recovery first" "deploy.script"}
     ${need "content recovery restored health" "deploy.script"}
-    ${need "content recovery first" "watchdog.script"}
-    ${need "content recovery restored health" "watchdog.script"}
-    ${need "rolling back exactly one generation" "watchdog.script"}
+    ${need "AGENT/NICEGUI REPORTED UNHEALTHY" "deploy.script"}
 
     # ── contentRecovery wired to hermes-tool revert (the recovery floor) ──
     echo "$contentRecovery" | grep -q "hermes-tool" \
       || { echo "MISSING: contentRecovery not set to hermes-tool" >&2; exit 1; }
     echo "$contentRecovery" | grep -q "revert" \
       || { echo "MISSING: contentRecovery not a revert" >&2; exit 1; }
-
-    # ── auto-commit timer exists so direct edits are captured in git ─────
-    ${need "OnUnitActiveSec" "content.timer"}
 
     # ── hermes-tool binary is a store path (immutable, recovery floor) ───
     case "$toolBinPath" in

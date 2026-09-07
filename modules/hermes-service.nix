@@ -190,10 +190,18 @@ in
     # /etc,/usr,/boot for every process in the unit, root included. Relax both
     # so the bot's root is real root — the safety net is the rollback
     # machinery, not a kernel sandbox.
+    # OnFailure: if the agent crashes, trigger content recovery which can
+    # revert skills/tools/MCP registrations at content-lane granularity —
+    # no Nix rebuild needed. If that doesn't fix it, the chain escalates
+    # to a Nix generation rollback via hermes-rollback-run.service.
+    # Both hermes-agent and hermes-nicegui share this OnFailure chain.
     systemd.services.hermes-agent = {
+      after = [ "network-online.target" ];
+      wantedBy = [ "multi-user.target" ];
       serviceConfig = {
         NoNewPrivileges = lib.mkForce false;
         ProtectSystem = lib.mkForce false;
+        OnFailure = "hermes-content-recovery-run.service";
       };
       # Restart the gateway when these markers change between generations.
       # Bumped for the Discord token migration (t_c5b70744): the deploy that

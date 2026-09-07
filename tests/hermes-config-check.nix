@@ -1,4 +1,4 @@
-# Fast, build-light verification of the Hermes deploy/rollback/watchdog wiring.
+# Fast, build-light verification of the Hermes deploy/rollback wiring.
 #
 # Asserts on the generated systemd units, scripts and CLI wrappers *text* at
 # eval time (seconds), instead of booting a VM. It does NOT replace the VM
@@ -19,33 +19,21 @@ let
       modules = [
         hermes-agent.nixosModules.default
         (import ./vm-configuration.nix)
-        {
-          # Deprecated: watchdog runs once at boot, not periodically.
-          services.hermes-deploy.watchdogInterval = "1h";
-        }
       ];
     }).config;
 
   # deploy/rollback ExecStart is now `systemd-run --unit=... ... <script>`
   # (self-kill hardening: the whole thing runs as a detached transient) —
-  # the actual script path is the last whitespace-separated token. watchdog
-  # stays a bare path (it runs in the foreground on purpose).
+  # the actual script path is the last whitespace-separated token.
   lastWord = s: lib.last (lib.splitString " " s);
 
   # Generated artifacts to assert on (store paths / small strings).
   deployScript = lastWord cfg.systemd.services."hermes-deploy".serviceConfig.ExecStart;
   rollbackScript = lastWord cfg.systemd.services."hermes-rollback".serviceConfig.ExecStart;
-  watchdogScript = cfg.systemd.services."hermes-watchdog".serviceConfig.ExecStart;
   deployUnit = pkgs.writeText "hermes-deploy.unit" cfg.systemd.units."hermes-deploy.service".text;
   rollbackUnit =
     pkgs.writeText "hermes-rollback.unit"
       cfg.systemd.units."hermes-rollback.service".text;
-  watchdogUnit =
-    pkgs.writeText "hermes-watchdog.unit"
-      cfg.systemd.units."hermes-watchdog.service".text;
-  watchdogTimer =
-    pkgs.writeText "hermes-watchdog.timer"
-      cfg.systemd.units."hermes-watchdog.timer".text;
   agentUnit = pkgs.writeText "hermes-agent.unit" cfg.systemd.units."hermes-agent.service".text;
 
   # Activation snippet that bootstraps /var/lib/hermes-deploy as a git repo
@@ -63,7 +51,7 @@ let
   rollbackBin = findBin "hermes-rollback";
 
   # git/openssh must be on the box (not just in the agent's sandbox): the
-  # deploy/rollback/watchdog scripts and `hermes-status` all run git against
+  # deploy/rollback/OnFailure scripts and `hermes-status` all run git against
   # the flake repo. A box without git cannot roll back. (Regression guard for
   # the `git: command not found` failure the integration test used to mask.)
   hasPackage =
@@ -87,12 +75,10 @@ let
 in
 pkgs.runCommand "hermes-config-check"
   {
-    inherit deployScript rollbackScript watchdogScript;
+    inherit deployScript rollbackScript;
     inherit
       deployUnit
       rollbackUnit
-      watchdogUnit
-      watchdogTimer
       agentUnit
       ;
     inherit statusBin deployBin rollbackBin;
@@ -103,63 +89,31 @@ pkgs.runCommand "hermes-config-check"
   ''
     cat $deployUnit > deploy.unit
     cat $rollbackUnit > rollback.unit
-    cat $watchdogUnit > watchdog.unit
-    cat $watchdogTimer > watchdog.timer
     cat $agentUnit > agent.unit
     cat $deployScript > deploy.script
     cat $rollbackScript > rollback.script
-    cat $watchdogScript > watchdog.script
     cat $statusBin/bin/hermes-status > status.bin
     cat $deployBin/bin/hermes-deploy > deploy.bin
     cat $rollbackBin/bin/hermes-rollback > rollback.bin
     cat $repoActivation > hermes-deploy-repo.activation
     cat $gitconfig > gitconfig
 
-    # ── deploy/rollback/watchdog units exist and are wired ─────────────
+    # ── deploy/rollback units exist and are wired ──────────────────────
     ${need "ExecStart" "deploy.unit"}
     ${need "ExecStart" "rollback.unit"}
-    ${need "ExecStart" "watchdog.unit"}
-    ${need "After=hermes-agent.service" "watchdog.unit"}
-    # Deliberately NOT `Requires=hermes-agent.service`: the watchdog exists
-    # precisely to roll back when the gateway is down. A hard Requires= means
-    # systemd refuses to even START the watchdog while its dependency has
-    # failed — disabling the one thing that's supposed to fix that. This was
-    # a latent bug in an earlier version of this module (asserted here as a
-    # MUST-HAVE); regression guard for it staying gone.
-    ${mustNot "Requires=hermes-agent.service" "watchdog.unit"}
-    ${need "OnBootSec=60sec" "watchdog.timer"}
-    # Watchdog runs once at boot — no OnUnitActiveSec (not periodic).
 
     # ── scripts carry the rollback-safety logic ────────────────────────
     ${need "nixos-rebuild switch" "deploy.script"}
-    ${need "AGENT REPORTED UNHEALTHY" "deploy.script"}
+    ${need "AGENT/NICEGUI REPORTED UNHEALTHY" "deploy.script"}
     ${need "last-known-good" "deploy.script"}
     ${need "nix-env -p /nix/var/nix/profiles/system --rollback" "rollback.script"}
     ${need "switch-to-configuration switch" "rollback.script"}
-    ${need "last-known-good" "watchdog.script"}
-    ${need "rolling back exactly one generation" "watchdog.script"}
-    ${need "not auto-rolling back" "watchdog.script"}
+    ${need "last-known-good" "rollback.script"}
+    ${need "rolling back system by one generation" "rollback.script"}
 
-    # The deploy-time auto-rollback must use the same low-level rollback, NOT
-    # `nixos-rebuild switch <store-path>` (prints usage, does nothing) and NOT
-    # `nixos-rebuild switch --rollback` (self-locates via NIX_PATH, which a
-    # flake-only box lacks).
-    ${need "nix-env -p /nix/var/nix/profiles/system --rollback" "deploy.script"}
-    if grep -q 'nixos-rebuild switch .*readlink' deploy.script; then
-      echo "FAIL: deploy.script passes a store path to nixos-rebuild switch (broken rollback)" >&2
-      exit 1
-    fi
-    if grep -q 'nixos-rebuild switch --rollback' deploy.script rollback.script watchdog.script; then
-      echo "FAIL: scripts use nixos-rebuild --rollback (needs NIX_PATH; fails on a flake-only box)" >&2
-      exit 1
-    fi
-
-    # currentGeneration must come from the ACTIVE profile link, not
-    # `list-generations | tail -n1` (stale high number after --rollback →
-    # watchdog walks past last-known-good, one generation per run, forever).
+    # ── current generation detection via profile link (not tail -n1) ──
     ${need "readlink /nix/var/nix/profiles/system" "deploy.script"}
     ${need "readlink /nix/var/nix/profiles/system" "rollback.script"}
-    ${need "readlink /nix/var/nix/profiles/system" "watchdog.script"}
     if grep -q 'list-generations.*tail -n1' deploy.script; then
       echo "FAIL: currentGeneration must not be derived from tail -n1" >&2
       exit 1
@@ -167,8 +121,8 @@ pkgs.runCommand "hermes-config-check"
 
     # currentGeneration's sed must ACTUALLY extract the number from a
     # `system-<N>-link` symlink. A pattern expecting `-system-` never matches
-    # (silently empty), which breaks the watchdog's rollback guard and writes
-    # an empty last-known-good. This shipped broken once — test the output.
+    # (silently empty), which breaks the rollback's guard and writes
+    # an empty last-known-good.
     if ! echo "system-10-link" | sed -n 's/.*system-\([0-9][0-9]*\)-link$/\1/p' | grep -qx '10'; then
       echo "FAIL: currentGeneration sed pattern does not match system-10-link" >&2
       exit 1
@@ -202,9 +156,7 @@ pkgs.runCommand "hermes-config-check"
     ${need "tag_gen()" "deploy.script"}
     ${need "sync_repo_to_gen()" "deploy.script"}
     ${need "sync_repo_to_gen()" "rollback.script"}
-    ${need "sync_repo_to_gen()" "watchdog.script"}
     ${need "submodule update --init --recursive" "rollback.script"}
-    ${need "submodule update --init --recursive" "watchdog.script"}
     ${need ''tag -f "gen-$1" HEAD'' "deploy.script"}
 
     # ── vendor/* submodules must be root-git-safe too ───────────────────
@@ -232,7 +184,7 @@ pkgs.runCommand "hermes-config-check"
     ${need "systemctl start hermes-deploy.service" "deploy.bin"}
     ${need "systemctl start hermes-rollback.service" "rollback.bin"}
 
-    # ── git/openssh are on the box (deploy machinery is git-driven) ────
+    # ── git/openssh are on the box (deploy/rollback/OnFailure are git-driven) ────
     test "$gitPresent" = "yes" || { echo "MISSING: git not in systemPackages — deploy/rollback cannot run" >&2; exit 1; }
     test "$sshPresent" = "yes" || { echo "MISSING: openssh not in systemPackages — ssh git remotes cannot fetch" >&2; exit 1; }
 

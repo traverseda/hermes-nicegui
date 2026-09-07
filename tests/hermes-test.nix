@@ -2,7 +2,7 @@
 #
 # Boots a VM with the shared modules and asserts that:
 #   * the hermes-agent gateway unit comes up,
-#   * the deploy/rollback/watchdog services exist and are wired,
+#   * the deploy/rollback OnFailure units exist and are wired,
 #   * a bad health report is NOT auto-rolled-back when there is no newer
 #     generation (i.e. it never rolls back a generation that was known good).
 #
@@ -27,8 +27,6 @@ pkgs.testers.runNixOSTest {
 
     # A predictable stateDir with a writable pidfile location.
     services.hermes-agent.stateDir = "/var/lib/hermes";
-
-    # Watchdog is now one-shot (runs once at boot), not periodic.
   };
 
   testScript = ''
@@ -59,11 +57,12 @@ pkgs.testers.runNixOSTest {
     machine.succeed(f"git -C /var/lib/hermes-deploy tag -f gen-{cur_gen}")
     machine.succeed("git -C /var/lib/hermes-deploy commit -q --allow-empty -m 'gen 2'")
 
-    # The three deploy units must exist and be correctly wired.
+    # The deploy/rollback units must exist and be wired. OnFailure (hermes-
+    # content-recovery-run, hermes-rollback-run) are not exposed as timers —
+    # they run when hermes-agent/hermes-nicegui crashes.
     machine.succeed("systemctl cat hermes-deploy.service | grep -q ExecStart")
     machine.succeed("systemctl cat hermes-rollback.service | grep -q ExecStart")
-    machine.succeed("systemctl cat hermes-watchdog.service | grep -q ExecStart")
-    machine.succeed("systemctl is-enabled hermes-watchdog.timer")
+    machine.succeed("systemctl cat hermes-content-recovery-run.service | grep -q ExecStart")
 
     # The bot-facing CLI wrappers exist (and git is on the box — a missing git
     # used to be masked here by `|| true`; hermes-status would hit `git:
