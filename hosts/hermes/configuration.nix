@@ -430,6 +430,18 @@
   time.timeZone = "America/Halifax";
   system.stateVersion = "26.05";
 
+  # ── NixOS dynamic linker ────────────────────────────────────────────
+  # programs.nix-ld: installs a custom dynamic linker (ld-linux) that knows
+  # about all Nix store libraries. Without this, non-Nix processes
+  # (virtualenv Python, system Python, Playwright, any pip-installed C
+  # extension) cannot find libstdc++.so.6, libpython, etc. — they only see
+  # /lib and /usr/lib which are empty on NixOS. Required for pip installs,
+  # virtualenvs, and any compiled Python packages in user-managed environments.
+  programs.nix-ld.enable = true;
+  programs.nix-ld.libraries = [
+    "${pkgs.gcc.lib}/lib"
+  ];
+
   # configfs cannot be mounted in an unprivileged LXC, so the default
   # sys-kernel-config.mount fails at every boot/switch. switch-to-configuration
   # then returns non-zero, which makes EVERY nixos-rebuild switch "fail" —
