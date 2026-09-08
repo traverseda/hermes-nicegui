@@ -37,7 +37,7 @@
     # themselves — modules/hermes-nicegui.nix and modules/xaelwiki.nix
     # build a package from the fetched source.
     hermes-nicegui-src = {
-      url = "github:traverseda/hermes-nicegui/fix-stop-button-visibility";
+      url = "github:traverseda/hermes-nicegui/main";
       flake = false;
     };
     xaelwiki-src = {
