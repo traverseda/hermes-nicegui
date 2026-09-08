@@ -424,11 +424,14 @@ let
   # Evaluated at build time so activation always gets the real source.
   activationManifest = pkgs.writeTextFile {
     name = "activation-manifest.tsv";
-    text = lib.concatStringsSep "\n" (
-      lib.imap (i: f:
-        "${f.source}\t${f.dest}\t${f.mode}\t${f.owner}\t${f.group}"
-      ) cfg.activationFiles
-    ) + "\n";
+    text =
+      let
+        names = builtins.sort builtins.lessThan (builtins.attrNames cfg.activationFiles);
+        entries = lib.concatMap (key:
+          let f = cfg.activationFiles.${key};
+          in "${f.source}\t${f.dest}\t${f.mode}\t${f.owner}\t${f.group}"
+        ) names;
+      in lib.concatStringsSep "\n" entries + "\n";
   };
 
   # Activation script that syncs activation-managed files from the
