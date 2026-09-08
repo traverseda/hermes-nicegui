@@ -500,7 +500,7 @@ let
     # This is the critical step — vendor edits that forget `nix flake lock`
     # will get caught here with a clear error message.
     log "pre-deploy validation (flake check --no-build)"
-    if ! nix flake check --no-build "$cfg.repoDir" 2>&1 | tee -a /var/log/hermes-deploy.log; then
+    if ! nix flake check --no-build "${cfg.repoDir}" 2>&1 | tee -a /var/log/hermes-deploy.log; then
       log "pre-deploy validation FAILED — aborting deploy"
       log "Run 'nix flake check --no-build' to see the full error."
       log "Common fix: commit/push to the fork reop, then `nix flake lock --update-input hermes-agent` (or the equivalent nicegui/xaelwiki input), commit flake.lock, and re-deploy."
