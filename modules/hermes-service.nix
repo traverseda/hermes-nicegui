@@ -205,6 +205,34 @@ in
         NoNewPrivileges = lib.mkForce false;
         ProtectSystem = lib.mkForce false;
         Environment = "XDG_RUNTIME_DIR=/run/user/999";
+        # Load the full agenix aggregate .env into the service environment.
+        EnvironmentFile = "/run/agenix/hermes.env";
+        # Pre-start guard: validate that the agenix env and every secret the
+        # gateway depends on actually exist before allowing the process to run.
+        # This catches the case where systemctl restart skips the agenix
+        # activationScripts (on NixOS, activationScripts only run during
+        # nixos-rebuild switch). If any required key is missing, the service
+        # fails fast rather than starting with a broken .env.
+        ExecStartPre = pkgs.writeShellScript "hermes-agent-env-check" ''
+          set -eu -o pipefail
+          ENV="/var/lib/hermes/.hermes/.env"
+          if [[ ! -f "$ENV" ]]; then
+            echo "ERROR: $ENV does not exist — agenix activation may not have run" >&2
+            exit 1
+          fi
+          for key in \
+            LLM_API_KEY \
+            HINDSIGHT_API_KEY \
+            HINDSIGHT_API_TENANT_API_KEY \
+            HINDSIGHT_API_TOKEN \
+          ; do
+            if ! grep -q "^$key=" "$ENV"; then
+              echo "ERROR: $key is not set in $ENV" >&2
+              exit 1
+            fi
+          done
+          echo "OK: agenix environment validated"
+        '';
       };
       # Restart the gateway when these markers change between generations.
       # Bumped for the Discord token migration (t_c5b70744): the deploy that
