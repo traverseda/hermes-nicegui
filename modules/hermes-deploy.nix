@@ -524,22 +524,18 @@ let
 
     # ── Review gate ────────────────────────────────────────────────────
     ${lib.optionalString cfg.requireReview ''
-      log "review gate enabled — checking for review marker on HEAD"
-      head_tag=$(git -C ${cfg.repoDir} tag -l --points-at HEAD reviewed 2>/dev/null | head -1)
-      head_msg=$(git -C ${cfg.repoDir} log -1 --format=%B 2>/dev/null || true)
-      if [ -n "$head_tag" ]; then
-        log "review gate: HEAD has the \"reviewed\" tag — passing"
-      elif echo "$head_msg" | grep -q "Reviewed-by:"; then
-        log "review gate: HEAD commit message contains \"Reviewed-by:\" — passing"
+      log "review gate enabled — checking for review approval"
+      if [ -f "${cfg.repoDir}/.review-approved" ]; then
+        log "review gate: .review-approved found — passing"
       else
-        log "ERROR: review gate BLOCKED — no review marker on HEAD"
-        log "  HEAD tag \"reviewed\" not found."
-        log "  HEAD commit message does not contain \"Reviewed-by:\"."
+        log "ERROR: review gate BLOCKED — no review approval"
+        log "  The file .review-approved does not exist in the repo."
         log ""
-        log "  To unblock, apply one of the following before deploying:"
-        log "    git tag -f reviewed HEAD           # tag the commit"
-        log "  or amend the commit to include:"
-        log "    Reviewed-by: Operator Name <email>"
+        log "  To unblock, create and commit this file before deploying:"
+        log "    touch .review-approved"
+        log "    git add .review-approved"
+        log "    git commit -m 'Approve for review deployment'"
+        log "    hermes-deploy"
         log ""
         log "  This gate prevents unreviewed changes from being deployed."
         deliver_callback 1 "review-blocked" ""
@@ -805,11 +801,13 @@ in
       type = lib.types.bool;
       default = false;
       description = ''
-        When true, the deploy script requires a review marker on HEAD
-        before building and switching. Accepts either:
-          * a git tag named "reviewed" on the HEAD commit, or
-          * a commit message containing "Reviewed-by:" (trailing whitespace
-            required, matching the conventional git trailers format).
+        When true, the deploy script requires a review marker before
+        building and switching. The operator creates a tracked
+        ``.review-approved`` file in the repo and commits it before
+        deploying. The deploy script checks for this file's existence
+        after the auto-commit step (the auto-commit would otherwise
+        move HEAD and invalidate tag-based checks).
+
         When false, deploys proceed without review (default for backward
         compatibility).
       '';
