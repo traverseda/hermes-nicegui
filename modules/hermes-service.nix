@@ -231,6 +231,26 @@ in
               exit 1
             fi
           done
+
+          # Check the runtime agenix aggregate file directly — this catches the
+          # case where /run/agenix/hermes.env is stale or missing (systemctl
+          # restart skips NixOS activationScripts which rebuild this file).
+          RUNTIME="/run/agenix/hermes.env"
+          if [[ ! -f "$RUNTIME" ]]; then
+            echo "ERROR: $RUNTIME does not exist — agenix activation may not have run" >&2
+            exit 1
+          fi
+          for key in \
+            LLM_API_KEY \
+            HINDSIGHT_API_KEY \
+            HINDSIGHT_API_TENANT_API_KEY \
+            HINDSIGHT_API_TOKEN \
+          ; do
+            if ! grep -q "^$key=" "$RUNTIME"; then
+              echo "ERROR: $key is not set in $RUNTIME" >&2
+              exit 1
+            fi
+          done
           echo "OK: agenix environment validated"
         '';
       };
