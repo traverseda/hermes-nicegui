@@ -26,7 +26,7 @@ in
       after = [ "hermes-agent.service" ];
 
       script = ''
-        ${pkgs.python3}/bin/python ${./hermes-tooling/log-monitor.py}
+        ${pkgs.python3Packages.python.withPackages (ps: [ ps.pyyaml ])}/bin/python ${./hermes-tooling/log-monitor.py}
       '';
 
       serviceConfig = {
