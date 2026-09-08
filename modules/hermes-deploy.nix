@@ -522,6 +522,31 @@ let
       log "deploy pre-check passed: ${pre}"
     '') cfg.deployPreChecks}
 
+    # ── Review gate ────────────────────────────────────────────────────
+    ${lib.optionalString cfg.requireReview ''
+      log "review gate enabled — checking for review marker on HEAD"
+      head_tag=$(git -C ${cfg.repoDir} tag -l --points-at HEAD reviewed 2>/dev/null | head -1)
+      head_msg=$(git -C ${cfg.repoDir} log -1 --format=%B 2>/dev/null || true)
+      if [ -n "$head_tag" ]; then
+        log "review gate: HEAD has the \"reviewed\" tag — passing"
+      elif echo "$head_msg" | grep -q "Reviewed-by:"; then
+        log "review gate: HEAD commit message contains \"Reviewed-by:\" — passing"
+      else
+        log "ERROR: review gate BLOCKED — no review marker on HEAD"
+        log "  HEAD tag \"reviewed\" not found."
+        log "  HEAD commit message does not contain \"Reviewed-by:\"."
+        log ""
+        log "  To unblock, apply one of the following before deploying:"
+        log "    git tag -f reviewed HEAD           # tag the commit"
+        log "  or amend the commit to include:"
+        log "    Reviewed-by: Operator Name <email>"
+        log ""
+        log "  This gate prevents unreviewed changes from being deployed."
+        deliver_callback 1 "review-blocked" ""
+        exit 1
+      fi
+    ''}
+
     log "building & switching generation (max-jobs ${toString cfg.maxJobs}, cores ${toString cfg.cores})"
     nixos-rebuild switch --max-jobs ${toString cfg.maxJobs} --cores ${toString cfg.cores} --flake "${cfg.repoDir}#${cfg.flakeAttr}" 2>&1 \
       | tee -a /var/log/hermes-deploy.log
@@ -772,6 +797,21 @@ in
         OnFailure recovery). 3G = half of RAM: enough for a serial build
         with evaluation, small enough that even a runaway builder cannot
         evict the resident stack faster than the kernel can reclaim.
+      '';
+    };
+
+    # ── Review gate ────────────────────────────────────────────────────
+    requireReview = lib.mkOption {
+      type = lib.types.bool;
+      default = false;
+      description = ''
+        When true, the deploy script requires a review marker on HEAD
+        before building and switching. Accepts either:
+          * a git tag named "reviewed" on the HEAD commit, or
+          * a commit message containing "Reviewed-by:" (trailing whitespace
+            required, matching the conventional git trailers format).
+        When false, deploys proceed without review (default for backward
+        compatibility).
       '';
     };
 

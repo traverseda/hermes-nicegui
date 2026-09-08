@@ -83,6 +83,10 @@
     repoDir = "/var/lib/hermes-deploy";
     flakeAttr = "hermes";
     branch = "main";
+    # Enable review gate: prevents unreviewed commits from being deployed.
+    # The operator must apply a "reviewed" tag or "Reviewed-by:" trailer
+    # before the deploy proceeds.  See docs/review-gate.md for the workflow.
+    requireReview = true;
     # R3 (ticket t_012f76dd) e2e demo: register a scratch file so the
     # activationFiles mechanism is exercised during the real deploy cycle.
     activationFiles = {
