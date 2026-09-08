@@ -216,7 +216,11 @@ in
 
     extraEnv = lib.mkOption {
       type = lib.types.attrsOf lib.types.str;
-      default = { };
+      default = {
+        # Point xaelwiki at the real skills content (the vault can't clone from
+        # codeberg.org — 404). The sidebar "Notes" link /xaelwiki reads from here.
+        HERMES_XAELWIKI_NOTES_DIR = "/var/lib/hermes/content/skills";
+      };
       description = "Extra environment variables for the unit.";
     };
 
