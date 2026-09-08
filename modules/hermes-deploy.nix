@@ -476,11 +476,13 @@ let
       fi
       local ts
       ts=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
-      local prev_gen="${PREV_GEN:-unknown}"
+      local prev_gen=''${PREV_GEN:-unknown}
+      local _fc
+      _fc=$(printf '%s' "$files_changed" | sed 's/"/\\"/g')
       cat >> ${cfg.deployAuditLog} <<AUDIT_EOF
-{"timestamp":"${ts}","status":"${status}","generation":"${gen}","prev_generation":"${prev_gen}","review_approved":"${review_approved}","review_approver":"${review_approver}","files_changed":"${files_changed//\"/\\\"}","health_check_failures":"${health_fail}"}
+{"timestamp":"''${ts}","status":"''${status}","generation":"''${gen}","prev_generation":"''${prev_gen}","review_approved":"''${review_approved}","review_approver":"''${review_approver}","files_changed":"''${_fc}","health_check_failures":"''${health_fail}"}
 AUDIT_EOF
-      log "audit: ${status} recorded at ${ts} (gen ${gen})"
+      log "audit: ''${status} recorded at ''${ts} (gen ''${gen})"
     }
   '';
 
