@@ -124,7 +124,7 @@ in
       createHome = true;
     };
     users.groups.xaelwiki = {
-      extraMembers = [ "hermes" ];
+      members = [ "hermes" "xaelwiki" ];
     };
 
     # ── Tailnet exposure via the registry (credential-enforced) ─────────
