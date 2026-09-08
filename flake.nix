@@ -37,7 +37,7 @@
     # themselves — modules/hermes-nicegui.nix and modules/xaelwiki.nix
     # build a package from the fetched source.
     hermes-nicegui-src = {
-      url = "github:traverseda/hermes-nicegui/fix-message-drops";
+      url = "github:traverseda/hermes-nicegui/fix-stop-button-visibility";
       flake = false;
     };
     xaelwiki-src = {
