@@ -815,6 +815,11 @@ def register_pages(plugin: Plugin) -> None:
 
         _run_in_client(do_stop)
 
+    def _go_to_session(session_id: str) -> None:
+        """Navigate to a session's detail page, inside the click handler's
+        slot context so ``ui.navigate.to`` can resolve the right client."""
+        _run_in_client(partial(ui.navigate.to, f"/sessions/{session_id}"))
+
     @ui.page("/sessions", title="Sessions")
     async def sessions_page() -> None:
         _hydrate_read_state()
@@ -880,7 +885,7 @@ def register_pages(plugin: Plugin) -> None:
                     dialog.open()
 
                 with (
-                    ui.item(on_click=partial(ui.navigate.to, f"/sessions/{s.id}"))
+                    ui.item(on_click=partial(_go_to_session, s.id))
                     .props("v-ripple")
                     .mark("session-row")
                 ):
