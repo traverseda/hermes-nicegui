@@ -1,0 +1,3 @@
+[submodule "vendor/hermes-nicegui"]
+	path = vendor/hermes-nicegui
+	url = https://github.com/hermes-3640/hermes-nicegui.git
