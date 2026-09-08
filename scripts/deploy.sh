@@ -53,9 +53,9 @@ fi
 if [[ "$FORCE_MEMORY" != "true" ]]; then
   echo "== checking free memory on $HOST =="
   FREE_MB=$(ssh "$HOST" 'free -t | awk \"/^total:/ { print \\$7 - \\$8 }\"')
-  # If SwapFree is 0, just check MemAvailable
-  SWAP_FREE=$(ssh "$HOST" 'free -m | awk \"/^Swap:/ { print \\$4 }\"')
-  MEM_AVAIL=$(ssh "$HOST" 'awk \"/MemAvailable:/ { print int(\\$2/1024) }\" /proc/meminfo')
+  # If SwapFree is 0 or missing, the system has no swap — headroom is all RAM.
+  SWAP_FREE=$(ssh "$HOST" 'free -m | awk "/^Swap:/ { print \\$4 }"')
+  MEM_AVAIL=$(ssh "$HOST" 'awk "/MemAvailable:/ { print int(\\$2/1024) }" /proc/meminfo')
 
   # headroom = MemAvailable + SwapFree
   if [[ -z "$SWAP_FREE" || "$SWAP_FREE" == "0" ]]; then
