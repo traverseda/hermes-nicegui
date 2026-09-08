@@ -1176,36 +1176,14 @@ def register_pages(plugin: Plugin) -> None:
 
             def _sync_streaming_controls() -> None:
                 """Reflect the `streaming` flag on every control it gates --
-                the stop button, and "Load earlier" (which must not run
-                concurrently with a live turn's own DOM rebuild -- see
-                `_render_live`'s history/live split, which assumes nothing
-                is ever inserted before `pending_index`/`live_entry_mark`
-                while a turn is in flight)."""
-                nonlocal stop_button
+                the stop button (shown/hidden in-place), and "Load earlier"
+                (which must not run concurrently with a live turn's own DOM
+                rebuild -- see `_render_live`'s history/live split, which
+                assumes nothing is ever inserted before
+                `pending_index`/`live_entry_mark` while a turn is in flight)."""
                 should_show = streaming or is_running(session)
-                if should_show and stop_button is None:
-                    # Re-create (the element may have been deleted previously)
-                    with ui.row():
-                        stop_button = (
-                            ui.button(icon="stop", color="negative", on_click=_stop)
-                            .props("round dense")
-                            .mark("chat-stop")
-                        )
-                elif should_show and stop_button is not None:
-                    # Already present and visible; ensure it's attached
-                    if _is_attached(stop_button):
-                        pass  # fine as-is
-                    else:
-                        # Was detached by a concurrent teardown; rebuild
-                        with ui.row():
-                            stop_button = (
-                                ui.button(icon="stop", color="negative", on_click=_stop)
-                                .props("round dense")
-                                .mark("chat-stop")
-                            )
-                elif not should_show and stop_button is not None:
-                    _delete_if_attached(stop_button)
-                    stop_button = None
+                if stop_button is not None:
+                    stop_button.set_visibility(should_show)
                 if earlier_button is not None:
                     earlier_button.set_enabled(not streaming)
 
