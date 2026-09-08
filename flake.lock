@@ -80,8 +80,7 @@
       },
       "locked": {
         "lastModified": 1788797634,
-        "narHash": "sha256-0Gr7ImDQtQcxMRfpkIDs+xF4tSvIsbvrxZSUE0fetHc=",
-        "ref": "refs/heads/main",
+        "narHash": "sha256-q7J8rLAhQsSv1Kh/iWGUwMkFBlNmYGMf50p7AsBg0jc=",
         "rev": "233757037df1f03f9fe1cfddc097acd5ad7f7510",
         "revCount": 32619,
         "shallow": false,
