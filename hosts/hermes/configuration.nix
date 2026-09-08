@@ -38,7 +38,9 @@
   # deploy/rollback/watchdog pipeline is untouched. Browser edits land
   # as uncommitted changes in the repo (they still need a commit +
   # nixos-rebuild to ship). Nothing about this mount technically restricts
-  # edits to vendor/ alone; the whole repoDir, including flake.nix and hosts/,
+  # edits to flake inputs alone (hermes-agent, hermes-nicegui, xaelWiki are
+  # github: inputs now — there is no vendor/ directory; the deploy pre-check
+  # verifies this on every deploy); the whole repoDir, including flake.nix and hosts/,
   # is reachable this way. That's a deliberate tradeoff, not an oversight —
   # the Files tab sits behind the nicegui app's own login either way, and the
   # git ledger + generation rollback are what make any edit through it
@@ -74,7 +76,7 @@
     # Operator mandate t_89f84f69 (2026-08-25): reliability-first free window.
     # Declared here so the activation deep-merge keeps the live kanban
     # concurrency instead of reverting it to the module default (1).
-    settings.kanban.max_in_progress_per_profile = 8;
+    settings.kanban.max_in_progress_per_profile = 4;
   };
 
   # Git-driven deploy + health-checked auto-rollback (see module docs).

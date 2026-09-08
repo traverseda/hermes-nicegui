@@ -802,11 +802,12 @@ in
       default = false;
       description = ''
         When true, the deploy script requires a review marker before
-        building and switching. The operator creates a tracked
-        ``.review-approved`` file in the repo and commits it before
-        deploying. The deploy script checks for this file's existence
-        after the auto-commit step (the auto-commit would otherwise
-        move HEAD and invalidate tag-based checks).
+        building and switching. The operator commits a file
+        ``.review-approved`` to the repo (the deploy script checks that
+        the file is tracked in git — a committed file persists across
+        the auto-commit step, so it is always present when needed).
+        A single commit of ``.review-approved`` enables review-gated
+        deploys permanently. To disable, remove the file and commit.
 
         When false, deploys proceed without review (default for backward
         compatibility).
