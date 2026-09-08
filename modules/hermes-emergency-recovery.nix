@@ -115,7 +115,7 @@ let
       log "Escalating to opencode for diagnosis and recovery..."
 
       # Write diagnostic context to a temp file opencode can read
-      DIALOG_CONTEXT=$(mktemp /tmp/emergency-$(date +%s).ctx)
+      DIALOG_CONTEXT=$(mktemp /tmp/emergency-XXXXXX.ctx)
       cat > "$DIALOG_CONTEXT" <<EMERGENCY_EOF
 # Emergency Recovery Context — $TIMESTAMP
 
@@ -222,10 +222,9 @@ in
         PrivateTmp = true;
         ProtectSystem = "strict";
         ReadWritePaths = "${hermesHome} /var/log";
-        # Override NixOS's default systemd PATH so opencode is available.
-        # We use mkForce to defeat NixOS's built-in PATH default.
-        # Note: the hermes-agent binary path is from the flake input.
-        Path = lib.mkForce "${pkgs.systemd}/bin:${pkgs.coreutils}/bin:${pkgs.findutils}/bin:${pkgs.gnused}/bin:${pkgs.gnugrep}/bin:${pkgs.curl}/bin:${pkgs.jq}/bin:${pkgs.opencode}/bin:${pkgs.bashInteractive}/bin:${pkgs.git}/bin:${pkgs.age}/bin";
+        # Inherit the hermes-agent PATH (includes opencode) so recovery
+        # commands work without relying on /etc/profile or a broken Path key.
+        Environment = "PATH=/run/wrappers/bin:/run/current-system/sw/bin:${pkgs.systemd}/bin:${pkgs.coreutils}/bin:${pkgs.findutils}/bin:${pkgs.gnused}/bin:${pkgs.gnugrep}/bin:${pkgs.curl}/bin:${pkgs.jq}/bin:${pkgs.opencode}/bin:${pkgs.bashInteractive}/bin:${pkgs.git}/bin:${pkgs.age}/bin";
       };
 
       environment = {
