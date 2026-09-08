@@ -83,7 +83,7 @@ let
     QUICK_FIX=""
     if echo "$FAILURES" | grep -q "hermes-agent"; then
       log "Attempting quick restart of hermes-agent..."
-      sudo systemctl restart hermes-agent 2>&1 | tee -a "$LOGFILE"
+      systemctl restart hermes-agent 2>&1 | tee -a "$LOGFILE"
       sleep 5
       if systemctl is-active --quiet hermes-agent; then
         QUICK_FIX="hermes-agent restart resolved"
@@ -92,7 +92,7 @@ let
     fi
     if echo "$FAILURES" | grep -q "hermes-nicegui"; then
       log "Attempting quick restart of hermes-nicegui..."
-      sudo systemctl restart hermes-nicegui 2>&1 | tee -a "$LOGFILE"
+      systemctl restart hermes-nicegui 2>&1 | tee -a "$LOGFILE"
       sleep 5
       if systemctl is-active --quiet hermes-nicegui; then
         QUICK_FIX="hermes-nicegui restart resolved"
@@ -210,44 +210,25 @@ in
 
       serviceConfig = {
         Type = "oneshot";
-        User = agentUser;
-        # Full PATH including opencode + systemctl (sudo wrapper) + hermes
-        # + standard tools. This must be self-contained because systemd-run
-        # gives a minimal PATH.
+        # Run as root — we need full systemctl control to restart
+        # hermes-agent / hermes-nicegui (no sudo needed when already root).
+        User = "root";
+        Group = "root";
         ExecStart = "${recoveryScript}";
         # Don't let the recovery script wedge the system — hard timeout.
         TimeoutStartSec = 600;  # 10 minutes max
-        # Allow the script to write logs
         StateDirectory = "hermes-recovery";
         LogsDirectory = "hermes-recovery";
-        # Read-write the workspace for opencode to write files
         PrivateTmp = true;
         ProtectSystem = "strict";
         ReadWritePaths = "${hermesHome} /var/log";
-        # Run as hermes user, but need sudo for systemctl restart
-        # hermes user has passwordless sudo on this box.
-        # However, systemd units run as a specific user without sudo
-        # by default. The script uses `sudo` which requires the sudo
-        # wrapper in PATH. For a systemd unit, we grant the hermes user
-        # the ability to restart the two target units via polkit OR
-        # just set the unit to run as root with the recovery script
-        # calling sudo (which works since hermes has NOPASSWD ALL).
-        # Actually, run as root since we need to restart services.
-        User = "root";
       };
 
-      # Ensure the unit has access to everything it needs
       environment = {
         HERMES_HOME = hermesHome;
         PATH = "/run/wrappers/bin:/run/current-system/sw/bin:/nix/store/33shb1pzn55f0i8639mmclsvx5l3vcm8-hermes-agent-0.21.1/bin:/nix/store/1zs9dv644by0ndsmlgzmphancihhv902-opencode-1.18.28/bin:/var/lib/hermes/.npm/_npx/e7132b4f6a72e5a9/node_modules/.bin";
       };
     };
-
-    # Override: run as root so we can sudo systemctl restart things.
-    # The recovery script itself has full sudo access via the hermes
-    # user's NOPASSWD ALL rule, but as root we skip sudo entirely.
-    systemd.services.hermes-emergency-recovery.serviceConfig.User = "root";
-    systemd.services.hermes-emergency-recovery.serviceConfig.Group = "root";
 
     # ── Timer unit ─────────────────────────────────────────────────────
     systemd.timers."hermes-emergency-recovery-timer" = {
