@@ -83,6 +83,17 @@
     repoDir = "/var/lib/hermes-deploy";
     flakeAttr = "hermes";
     branch = "main";
+    # R3 (ticket t_012f76dd) e2e demo: register a scratch file so the
+    # activationFiles mechanism is exercised during the real deploy cycle.
+    activationFiles = {
+      r3-demo = {
+        source = ./r3-activation-scratch.txt;
+        dest = "/var/lib/hermes/.hermes/test/r3-demo.txt";
+        mode = "0644";
+        owner = "hermes";
+        group = "hermes";
+      };
+    };
   };
 
   # ── Opencode handled by modules/opencode.nix ─────────────────────
