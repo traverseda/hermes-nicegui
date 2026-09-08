@@ -75,7 +75,7 @@
     # Operator mandate t_89f84f69 (2026-08-25): reliability-first free window.
     # Declared here so the activation deep-merge keeps the live kanban
     # concurrency instead of reverting it to the module default (1).
-    settings.kanban.max_in_progress_per_profile = 8;
+    settings.kanban.max_in_progress_per_profile = 4;
   };
 
   # Git-driven deploy + health-checked auto-rollback (see module docs).
