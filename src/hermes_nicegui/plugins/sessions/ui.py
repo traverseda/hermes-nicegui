@@ -1542,29 +1542,52 @@ def register_pages(plugin: Plugin) -> None:
                     _queue_message(text)
                     return
                 streaming = True
-                stream_task = asyncio.current_task()
-                try:
-                    own_ids: list[int] | None = None
-                    while True:
-                        await _run_turn(text, own_local_ids=own_ids)
-                        if queued_turn is None:
-                            break
-                        text, own_ids = queued_turn.text, queued_turn.local_ids
-                        queued_turn = None
-                finally:
-                    streaming = False
-                    stream_task = None
-                # Turn(s) finished (or were stopped) — refresh the header stats.
-                try:
-                    session = await store.sessions.get_session(session_id)
-                except HermesError:
-                    pass
-                else:
-                    stats_label.set_text(_stats_text())
-                    _update_running_indicator(
-                        is_running(session), session.last_activity_description
-                    )
-                    _sync_streaming_controls()
+
+                # Capture the client context so UI operations work from the
+                # background task.  Without this, _render_live/scroll/notify
+                # inside the turn loop silently no-op because the task has no
+                # slot stack (confirmed: this is the same pattern
+                # _run_in_client uses at line 738).
+                page_client = ui.context.client
+
+                # Run the turn loop in a background task so a browser
+                # disconnect (which cancels the page coroutine) does not kill
+                # the streaming SSE connection.  The background task outlives
+                # the page and keeps the turn processing alive.
+                async def _run_turns() -> None:
+                    nonlocal streaming, stream_task, session, queued_turn, text
+                    try:
+                        own_ids: list[int] | None = None
+                        while True:
+                            with page_client:
+                                await _run_turn(text, own_local_ids=own_ids)
+                            if queued_turn is None:
+                                break
+                            text, own_ids = queued_turn.text, queued_turn.local_ids
+                            queued_turn = None
+                    finally:
+                        streaming = False
+                        stream_task = None
+                        # Turn(s) finished (or were stopped) — refresh the
+                        # header stats.
+                        try:
+                            fresh = await store.sessions.get_session(
+                                session_id
+                            )
+                        except HermesError:
+                            pass
+                        else:
+                            session = fresh
+                            stats_label.set_text(_stats_text())
+                            _update_running_indicator(
+                                is_running(session),
+                                session.last_activity_description,
+                            )
+                            _sync_streaming_controls()
+
+                stream_task = background_tasks.create(
+                    _run_turns(), name=f"turn-{session_id}"
+                )
 
             async def _do_stop() -> None:
                 nonlocal queued_turn, stream_task, session
