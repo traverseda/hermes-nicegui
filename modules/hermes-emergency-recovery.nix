@@ -234,14 +234,11 @@ in
     systemd.timers."hermes-emergency-recovery-timer" = {
       description = "Hermes emergency recovery checker timer (30min)";
       wantedBy = [ "timers.target" ];
-      unit = {
-        PartOf = [ "hermes-emergency-recovery.service" ];
-        # 30-minute interval
-        TimerConfig.OnBootSec = "5min";   # First run 5min after boot (avoid startup race)
-        TimerConfig.OnUnitActiveSec = "30min";
-        # Randomize slightly to avoid thundering herd if multiple timers exist
-        TimerConfig.RandomizedSec = "2min";
-      };
+      # 30-minute interval
+      timerConfig.OnBootSec = "5min";   # First run 5min after boot (avoid startup race)
+      timerConfig.OnUnitActiveSec = "30min";
+      # Randomize slightly to avoid thundering herd if multiple timers exist
+      timerConfig.RandomizedSec = "2min";
     };
 
     # Expose `hermes-recovery` CLI for manual trigger runs.
