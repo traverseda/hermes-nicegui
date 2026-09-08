@@ -767,7 +767,7 @@ def register_pages(plugin: Plugin) -> None:
                 return
             try:
                 await web.current_store().sessions.rename(session_id, new_title.strip())
-            except HermesError as exc:
+            except Exception as exc:
                 ui.notify(f"Rename failed: {exc}", type="negative")
                 return
             ui.notify("Session renamed", type="positive")
@@ -780,7 +780,7 @@ def register_pages(plugin: Plugin) -> None:
         async def do_delete() -> None:
             try:
                 await web.current_store().sessions.delete(session_id)
-            except HermesError as exc:
+            except Exception as exc:
                 ui.notify(f"Delete failed: {exc}", type="negative")
                 return
             ui.notify("Session deleted", type="positive")
@@ -795,7 +795,7 @@ def register_pages(plugin: Plugin) -> None:
         async def do_create() -> None:
             try:
                 session = await client.create_session()
-            except HermesError as exc:
+            except Exception as exc:
                 ui.notify(f"Failed to start session: {exc}", type="negative")
                 return
             ui.navigate.to(f"/sessions/{session.id}")
@@ -806,7 +806,7 @@ def register_pages(plugin: Plugin) -> None:
         async def do_stop() -> None:
             try:
                 await client.stop_session(session_id)
-            except HermesError as exc:
+            except Exception as exc:
                 ui.notify(f"Stop request failed: {exc}", type="warning")
                 return
             ui.notify("Session stopped", type="info")
@@ -949,7 +949,7 @@ def register_pages(plugin: Plugin) -> None:
                         limit=pager.limit,
                         offset=pager.offset,
                     )
-                except HermesError as exc:
+                except Exception as exc:
                     list_container.clear()
                     ui.notify(f"Failed to load sessions: {exc}", type="negative")
                     return
@@ -984,7 +984,7 @@ def register_pages(plugin: Plugin) -> None:
             try:
                 session = await store.sessions.get_session(session_id)
                 loaded_messages, has_earlier = await store.sessions.get_messages_page(session_id)
-            except HermesError as exc:
+            except Exception as exc:
                 ui.label(f"Failed to load session: {exc}")
                 return
             _mark_read(session_id)
@@ -1222,7 +1222,7 @@ def register_pages(plugin: Plugin) -> None:
                     older, has_earlier = await store.sessions.get_messages_page(
                         session_id, before_id=oldest_id
                     )
-                except HermesError as exc:
+                except Exception as exc:
                     ui.notify(f"Failed to load earlier messages: {exc}", type="negative")
                 else:
                     loaded_messages[:0] = older
@@ -1537,7 +1537,11 @@ def register_pages(plugin: Plugin) -> None:
                                 elif finalized:
                                     handles = _render_live()
                                     _scroll_to_bottom(transcript)
-                    except HermesError as exc:
+                    except Exception as exc:
+                        logger.exception("Message failed unexpectedly: %s", exc)
+                        ui.notify(f"Message failed: {exc}", type="negative")
+                        _render_history()
+                        _scroll_to_bottom(transcript)
                         ui.notify(f"Message failed: {exc}", type="negative")
                 finally:
                     current_run_id = None
