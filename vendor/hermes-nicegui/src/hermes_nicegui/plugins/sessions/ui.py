@@ -955,9 +955,9 @@ def register_pages(plugin: Plugin) -> None:
                     return
                 render_rows()
 
-            def _search_or_source_changed() -> None:
+            async def _search_or_source_changed() -> None:
                 pager.reset()
-                background_tasks.create(fetch())
+                await fetch()
 
             async def _refresh() -> None:
                 pager.reset()
