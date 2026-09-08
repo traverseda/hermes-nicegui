@@ -91,7 +91,12 @@ def _yaml_parse(text: str) -> dict[str, Any]:
                 k, v = _split_kv(stripped)
                 # nested dict under current_top
                 if current_top in result and isinstance(result[current_top], dict):
-                    result[current_top][k] = v
+                    # If value is empty (e.g. "hermes-agent:" with nothing after),
+                    # initialise as a dict so deeper children can nest into it.
+                    if v == "":
+                        result[current_top][k] = {}
+                    else:
+                        result[current_top][k] = v
                     current_sub = k
                 continue
 
