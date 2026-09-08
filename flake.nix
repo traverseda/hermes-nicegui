@@ -106,14 +106,9 @@
         ./modules/exposure.nix
         ./modules/cloudflare-tunnel.nix
         ./modules/xaelwiki.nix
-        ./opencode.nix
-        ./config.nix
-        ./hindsight.nix
-        ./exposure.nix
-        ./cloudflare-tunnel.nix
-        ./xaelwiki.nix
-        ./hermes-nicegui.nix
-        ./hermes-vnc.nix
+        ./modules/hermes-nicegui.nix
+        ./modules/hermes-vnc.nix
+        ./modules/playwright-mcp.nix
         ./hermes-log-monitor.nix
       ];
 
