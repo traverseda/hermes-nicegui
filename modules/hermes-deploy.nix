@@ -453,7 +453,7 @@ let
         continue
       fi
       mkdir -p "$(dirname "$dest")"
-      cp --no-preserve=mode,owner,group "$src" "$dest"
+      cp --no-preserve=mode,ownership "$src" "$dest"
       chmod "$mode" "$dest"
       chown "$owner:$group" "$dest"
       echo "activation-sync: synced $dest from $(basename $src)"
