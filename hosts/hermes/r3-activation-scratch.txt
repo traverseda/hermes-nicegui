@@ -1,7 +1,0 @@
-# R3 e2e scratch test
-# This file is part of the R3 activation-drift e2e demo.
-# It is installed ONLY by the activation script, proving the
-# activation-sync pass ships it when a commit touches only
-# activation-managed files.
-#
-# This file is temporary and will be removed after the demo.
