@@ -204,6 +204,7 @@ in
       serviceConfig = {
         NoNewPrivileges = lib.mkForce false;
         ProtectSystem = lib.mkForce false;
+        Environment = "XDG_RUNTIME_DIR=/run/user/999";
       };
       # Restart the gateway when these markers change between generations.
       # Bumped for the Discord token migration (t_c5b70744): the deploy that

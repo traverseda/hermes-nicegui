@@ -838,7 +838,7 @@ in
             # activation cycle that would otherwise kill this unit mid-execution.
             # ">/dev/null 2>&1 < /dev/null" closes fds so the detached process
             # doesn't hold onto the old generation's ptmx/sockets.
-            ExecStart = "${pkgs.coreutils}/bin/setsid ${deployScript} >/dev/null 2>&1 < /dev/null";
+            ExecStart = "${pkgs.util-linux}/bin/setsid ${deployScript} >/dev/null 2>&1 < /dev/null";
             TimeoutStartSec = 0;
             MemoryMax = cfg.switchMemoryMax;
           };
@@ -847,7 +847,7 @@ in
           hermes-rollback.path = [ config.system.path ];
           hermes-rollback.serviceConfig = {
             Type = "oneshot";
-            ExecStart = "${pkgs.coreutils}/bin/setsid ${rollbackScript} >/dev/null 2>&1 < /dev/null";
+            ExecStart = "${pkgs.util-linux}/bin/setsid ${rollbackScript} >/dev/null 2>&1 < /dev/null";
             TimeoutStartSec = 0;
             MemoryMax = cfg.switchMemoryMax;
           };
