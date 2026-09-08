@@ -221,10 +221,10 @@ in
     };
 
     noVNC = lib.mkOption {
-      type = lib.types.package;
-      default = pkgs.noVNC;
-      defaultText = lib.literalExpression "pkgs.noVNC";
-      description = "noVNC package providing the browser-based VNC client assets.";
+      type = lib.types.nullOr lib.types.package;
+      default = pkgs.novnc;
+      defaultText = lib.literalExpression "pkgs.novnc";
+      description = "noVNC package providing the browser-based VNC client assets. Null means the VNC viewer tab is not available.";
     };
   };
 
@@ -285,8 +285,10 @@ in
         HERMES_FILES_ROOT = cfg.filesRoot;
         HERMES_LOG_LEVEL = cfg.logLevel;
         # noVNC assets for the VNC plugin — the app serves them at /vnc/static.
-        HERMES_VNC_NOVNC_DIR = "${cfg.noVNC}/share/webapps/novnc";
+        # Conditionally set only if noVNC is configured.
         PYTHONPATH = "${appSrc}/src:${distInfo}";
+      } // lib.optionalAttrs (cfg.noVNC != null) {
+        HERMES_VNC_NOVNC_DIR = "${cfg.noVNC}/share/webapps/novnc";
       } // cfg.extraEnv;
 
       serviceConfig = {

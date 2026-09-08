@@ -428,7 +428,7 @@ let
     ) names;
   in pkgs.writeTextFile {
     name = "activation-manifest.tsv";
-    text = lib.concatStringsSep "\n" entries + "\n";
+    text = (lib.concatStringsSep "\n" entries) + "\n";
   };
 
   # Activation script that syncs activation-managed files from the
