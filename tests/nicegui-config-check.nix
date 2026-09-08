@@ -99,6 +99,8 @@ pkgs.runCommand "nicegui-config-check"
     ${need "hermes-nicegui-dist-info" "nicegui.unit"}
     ${need "WantedBy=multi-user.target" "nicegui.unit"}
     ${mustNot "/var/lib/hermes-nicegui/src" "nicegui.unit"}
+    # ── NO stale vendor/ references anywhere in the unit ─────────────────
+    ${mustNot "vendor/" "nicegui.unit"}
 
     # ── runs as the hermes user, hardened like the other units ──────────
     ${need "User=hermes" "nicegui.unit"}
