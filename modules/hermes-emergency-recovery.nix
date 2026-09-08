@@ -222,11 +222,14 @@ in
         PrivateTmp = true;
         ProtectSystem = "strict";
         ReadWritePaths = "${hermesHome} /var/log";
+        # Override NixOS's default systemd PATH so opencode is available.
+        # We use mkForce to defeat NixOS's built-in PATH default.
+        # Note: the hermes-agent binary path is from the flake input.
+        Path = lib.mkForce "${pkgs.systemd}/bin:${pkgs.coreutils}/bin:${pkgs.findutils}/bin:${pkgs.gnused}/bin:${pkgs.gnugrep}/bin:${pkgs.curl}/bin:${pkgs.jq}/bin:${pkgs.opencode}/bin:${pkgs.bashInteractive}/bin:${pkgs.git}/bin:${pkgs.age}/bin";
       };
 
       environment = {
         HERMES_HOME = hermesHome;
-        PATH = "/run/wrappers/bin:/run/current-system/sw/bin:/nix/store/33shb1pzn55f0i8639mmclsvx5l3vcm8-hermes-agent-0.21.1/bin:/nix/store/1zs9dv644by0ndsmlgzmphancihhv902-opencode-1.18.28/bin:/var/lib/hermes/.npm/_npx/e7132b4f6a72e5a9/node_modules/.bin";
       };
     };
 
