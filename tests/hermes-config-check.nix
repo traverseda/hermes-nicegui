@@ -185,6 +185,17 @@ pkgs.runCommand "hermes-config-check"
     #    `enable = false` override) ─────────────────────────────────────
     test "$tailscaleAuthKeyFile" = "/run/agenix/tailscale-auth"
 
+    # ── R3 activation-drift-trap (ticket t_012f76dd) ───────────────────
+    # The deploy script must contain the activation-sync pass that runs
+    # BEFORE nixos-rebuild, so the git ledger is consistent on every switch.
+    ${need "activationSyncScript" "deploy.script"}
+    ${need "R3 activation-sync pass" "deploy.script"}
+    ${need "activation-sync: synced" "deploy.script"}
+    ${need "activation-manifest.tsv" "deploy.script"}
+    # The activationFiles option must be present (non-empty default means
+    # the option type was accepted by the submodule).
+    echo "R3 activation-sync present in deploy script: OK"
+
     touch "$out"
     echo "hermes-config-check passed"
   ''

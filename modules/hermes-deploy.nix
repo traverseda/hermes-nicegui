@@ -419,10 +419,59 @@ let
     }
   '';
 
+  # ── R3 activation-drift trap (ticket t_012f76dd) ────────────────────
+  # Manifest: source(Nix store path)\tdest\tmode\towner\tgroup
+  # Evaluated at build time so activation always gets the real source.
+  activationManifest = pkgs.writeTextFile {
+    name = "activation-manifest.tsv";
+    text = lib.concatStringsSep "\n" (
+      lib.imap (i: f:
+        "${f.source}\t${f.dest}\t${f.mode}\t${f.owner}\t${f.group}"
+      ) cfg.activationFiles
+    ) + "\n";
+  };
+
+  # Activation script that syncs activation-managed files from the
+  # Nix store onto the live system. It is `lib.stringAfter ["users"]` so
+  # it runs AFTER ownership is established but BEFORE any agent starts.
+  # The script reads the manifest, copies source→dest, then chmod+chown.
+  # It is idempotent: a `cp --no-preserve` on every activation is safe.
+  activationSyncScript = pkgs.writeShellScript "activation-sync" ''
+    set -euo pipefail
+    # Guard: skip if we are in rollback (state/ is root-owned, git reset
+    # would delete our work; rollback must leave the PREVIOUS generation's
+    # activations intact).
+    if [ -n "${cfg.stateDir}" ] && [ -f "${cfg.stateDir}/rolling-back" ]; then
+      echo "activation-sync: rollback in progress — skipping"
+      exit 0
+    fi
+
+    while IFS=$'\t' read -r src dest mode owner group; do
+      [ -z "$src" ] && continue
+      if [ ! -e "$src" ]; then
+        echo "activation-sync: WARNING source $src does not exist — skipping"
+        continue
+      fi
+      mkdir -p "$(dirname "$dest")"
+      cp --no-preserve=mode,owner,group "$src" "$dest"
+      chmod "$mode" "$dest"
+      chown "$owner:$group" "$dest"
+      echo "activation-sync: synced $dest from $(basename $src)"
+    done < ${activationManifest}
+  '';
+
   # ── Deploy script ────────────────────────────────────────────────────
   # Build, switch, health-check, rollback if unhealthy.
   deployScript = pkgs.writeShellScript "hermes-deploy-script" ''
     set -euo pipefail
+
+    # ── R3: deployment-time activation sync pass ───────────────────────
+    # Copy activation-managed files BEFORE the nixos-rebuild switch so
+    # the git ledger is consistent. If the switch fails and rolls back,
+    # the sync pass runs again at next activation from the restored git.
+    echo "[hermes-deploy] R3 activation-sync pass (pre-switch)"
+    ${activationSyncScript}
+    echo "[hermes-deploy] activation-sync pass done"
 
     log() { echo "[hermes-deploy] $*"; }
     ${gitSyncFns}
@@ -723,6 +772,49 @@ in
         OnFailure recovery). 3G = half of RAM: enough for a serial build
         with evaluation, small enough that even a runaway builder cannot
         evict the resident stack faster than the kernel can reclaim.
+      '';
+    };
+
+    # ── R3 activation-drift trap (ticket t_012f76dd) ────────────────────
+    # Files managed by activation-scripts need a git-side truth so that
+    # activation can restore them when the Nix store path changes across a
+    # rebuild (the file on disk is stale because the activation script writes
+    # a NEW path but the file was not staged in the ledger).
+    activationFiles = lib.mkOption {
+      type = lib.types.attrsOf (
+        lib.types.submodule {
+          options = {
+            source = lib.mkOption {
+              type = lib.types.path;
+              description = "Source file in the repo (the git-side truth).";
+            };
+            dest = lib.mkOption {
+              type = lib.types.str;
+              description = "Absolute path where the file lives in the NixOS system.";
+            };
+            mode = lib.mkOption {
+              type = lib.types.str;
+              default = "0644";
+              description = "Octal file mode for the destination.";
+            };
+            owner = lib.mkOption {
+              type = lib.types.str;
+              description = "Owner for chown.";
+            };
+            group = lib.mkOption {
+              type = lib.types.str;
+              description = "Group for chown.";
+            };
+          };
+        }
+      );
+      default = {};
+      description = ''
+        Tab-separated manifest: source (repo-relative or absolute), dest
+        (absolute), mode, owner, group. Evaluated at Nix-build time so the
+        activation script can do `cp --no-preserve=mode,owner,group` and
+        then `chmod/chown` — the build-time source path is in the Nix store,
+        the dest is in the running system.
       '';
     };
   };
