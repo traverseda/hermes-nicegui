@@ -108,6 +108,7 @@
         ./modules/xaelwiki.nix
         ./modules/hermes-nicegui.nix
         ./modules/hermes-vnc.nix
+        ./modules/hermes-emergency-recovery.nix
         ./modules/playwright-mcp.nix
         ./hermes-log-monitor.nix
       ];

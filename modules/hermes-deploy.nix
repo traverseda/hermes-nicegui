@@ -427,9 +427,12 @@ let
     text =
       let
         names = builtins.sort builtins.lessThan (builtins.attrNames cfg.activationFiles);
+        # Strip derivation context from path interpolation so
+        # writeTextFile gets a plain string (Nix rejects strings-with-context).
+        strip = builtins.unsafeDiscardStringContext;
         entries = lib.concatMap (key:
           let f = cfg.activationFiles.${key};
-          in "${f.source}\t${f.dest}\t${f.mode}\t${f.owner}\t${f.group}"
+          in "${strip f.source}\t${strip f.dest}\t${strip f.mode}\t${strip f.owner}\t${strip f.group}"
         ) names;
       in lib.concatStringsSep "\n" entries + "\n";
   };

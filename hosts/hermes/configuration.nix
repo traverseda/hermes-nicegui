@@ -286,6 +286,15 @@
     darkMode = true;
   };
 
+  # ── Hermes emergency recovery ──────────────────────────────────────
+  # Periodic check (every 30 min) of hermes-agent + hermes-nicegui health.
+  # If either is down, attempts restart; if that fails, launches opencode
+  # to diagnose and recover, then creates a kanban post-mortem ticket.
+  # This is the final oh-shit safety net — runs as root for full control.
+  services.hermes-emergency-recovery = {
+    enable = true;
+  };
+
   # Loopback-only Xvfb+x11vnc display for human-in-the-loop tasks, served
   # through the vnc plugin tab. Unit exists always but is started ON DEMAND
   # by the bot (`systemctl start hermes-vnc`) — never at boot.
