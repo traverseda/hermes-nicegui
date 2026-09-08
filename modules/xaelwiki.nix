@@ -123,7 +123,9 @@ in
       home = cfg.stateDir;
       createHome = true;
     };
-    users.groups.xaelwiki = { };
+    users.groups.xaelwiki = {
+      extraMembers = [ "hermes" ];
+    };
 
     # ── Tailnet exposure via the registry (credential-enforced) ─────────
     hermesDeploy.exposure.services = [
