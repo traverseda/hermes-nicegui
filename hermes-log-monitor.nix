@@ -33,6 +33,7 @@ in
         Type = "simple";
         User = "hermes";
         Group = "hermes";
+        SupplementaryGroups = [ "systemd-journal" ];
         WorkingDirectory = "/var/lib/hermes/workspace";
         Environment = "HERMES_HOME=/var/lib/hermes/.hermes";
         StandardOutput = "journal";
