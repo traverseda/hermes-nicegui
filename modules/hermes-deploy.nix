@@ -419,22 +419,16 @@ let
     }
   '';
 
-  # ── R3 activation-drift trap (ticket t_012f76dd) ────────────────────
-  # Manifest: source(Nix store path)\tdest\tmode\towner\tgroup
-  # Evaluated at build time so activation always gets the real source.
-  activationManifest = pkgs.writeTextFile {
+  activationManifest = let
+    strip = builtins.unsafeDiscardStringContext;
+    names = builtins.sort builtins.lessThan (builtins.attrNames cfg.activationFiles);
+    entries = map (key:
+      let f = cfg.activationFiles.${key};
+      in "${strip f.source}\t${strip f.dest}\t${strip f.mode}\t${strip f.owner}\t${strip f.group}"
+    ) names;
+  in pkgs.writeTextFile {
     name = "activation-manifest.tsv";
-    text =
-      let
-        names = builtins.sort builtins.lessThan (builtins.attrNames cfg.activationFiles);
-        # Strip derivation context from path interpolation so
-        # writeTextFile gets a plain string (Nix rejects strings-with-context).
-        strip = builtins.unsafeDiscardStringContext;
-        entries = lib.concatMap (key:
-          let f = cfg.activationFiles.${key};
-          in "${strip f.source}\t${strip f.dest}\t${strip f.mode}\t${strip f.owner}\t${strip f.group}"
-        ) names;
-      in (lib.concatStringsSep "\n" entries) + "\n";
+    text = lib.concatStringsSep "\n" entries + "\n";
   };
 
   # Activation script that syncs activation-managed files from the

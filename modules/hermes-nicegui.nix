@@ -45,6 +45,9 @@
 #     web server with a username/password (cookie session, needs the
 #     PLAINTEXT dashboard password — the dashboard-env secret only holds the
 #     scrypt hash, so a separate secret is required). Never in Nix config.
+#   * The VNC plugin serves a noVNC viewer over the app's login + single-use
+#     token. `cfg.noVNC` (default `pkgs.noVNC`) provides the static assets;
+#     `HERMES_VNC_NOVNC_DIR` is set so the plugin registers them at `/vnc/static`.
 
 {
   config,
@@ -216,6 +219,13 @@ in
       default = { };
       description = "Extra environment variables for the unit.";
     };
+
+    noVNC = lib.mkOption {
+      type = lib.types.package;
+      default = pkgs.noVNC;
+      defaultText = lib.literalExpression "pkgs.noVNC";
+      description = "noVNC package providing the browser-based VNC client assets.";
+    };
   };
 
   config = lib.mkIf cfg.enable {
@@ -233,6 +243,8 @@ in
     # discovers the built-in plugins. The `hermes` CLI subprocess (sessions/
     # cron/chat) uses the exact binary the agent runs, and shares
     # $HERMES_HOME so profile state resolves the same way.
+    # HERMES_VNC_NOVNC_DIR points at noVNC's share/webapps/novnc directory so
+    # the VNC plugin serves its browser client assets at /vnc/static.
     systemd.services.hermes-nicegui = {
       description = "hermes-nicegui web UI";
       wantedBy = [ "multi-user.target" ];
@@ -272,6 +284,8 @@ in
         HERMES_DATA_DIR = cfg.dataDir;
         HERMES_FILES_ROOT = cfg.filesRoot;
         HERMES_LOG_LEVEL = cfg.logLevel;
+        # noVNC assets for the VNC plugin — the app serves them at /vnc/static.
+        HERMES_VNC_NOVNC_DIR = "${cfg.noVNC}/share/webapps/novnc";
         PYTHONPATH = "${appSrc}/src:${distInfo}";
       } // cfg.extraEnv;
 
