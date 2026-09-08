@@ -280,6 +280,11 @@
   # by the bot (`systemctl start hermes-vnc`) — never at boot.
   services.hermes-vnc.enable = true;
 
+  # ── Log Monitor ───────────────────────────────────────────────────────
+  # Watches hermes-agent, hermes-nicegui, and podman-hindsight logs for
+  # errors and opens deduplicated kanban tickets (one per service).
+  services.hermes-log-monitor.enable = true;
+
   # Operator mandate t_89f84f69: pin model via hermesDeploy.providers so all
   # services (hermes, opencode, hindsight, nicegui, ha) use it.
   hermesDeploy.providers.local = {
