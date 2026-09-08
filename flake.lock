@@ -95,11 +95,11 @@
     "hermes-nicegui-src": {
       "flake": false,
       "locked": {
-        "lastModified": 1788845463,
-        "narHash": "sha256-dU9g+qVCn1un6daNtncjKr8vMrnjypj8ybgTzg9vOiM=",
+        "lastModified": 1788848779,
+        "narHash": "sha256-lQWNTlls2A+wtCop53/UJ2tSbQOSCNE4deW/TAltZ9A=",
         "owner": "traverseda",
         "repo": "hermes-nicegui",
-        "rev": "9c0b6650c031f1a3fc1d4dcd17690316793eb438",
+        "rev": "137efd58a77920e40f1ba92c247772656d473b71",
         "type": "github"
       },
       "original": {
