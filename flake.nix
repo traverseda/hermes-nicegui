@@ -28,7 +28,7 @@
     # repo, then deploying a new generation. The input is `inputs.nixpkgs`
     # followed to this repo's nixpkgs, so no stale/parallel pkgs.
     hermes-agent = {
-      url = "github:NousResearch/hermes-agent";
+      url = "github:hermes-3640/hermes-agent";
       inputs.nixpkgs.follows = "nixpkgs";
     };
 
