@@ -95,14 +95,18 @@
     "hermes-nicegui-src": {
       "flake": false,
       "locked": {
-        "path": "./vendor/hermes-nicegui",
-        "type": "path"
+        "lastModified": 1788834638,
+        "narHash": "sha256-20Y4PzB/guSXj0UVNTqo33pH4XIxN+AzAqLbjDFD4LE=",
+        "owner": "hermes-3640",
+        "repo": "hermes-nicegui",
+        "rev": "face8fd0547c1174986852b2edb6d0805ca61de7",
+        "type": "github"
       },
       "original": {
-        "path": "./vendor/hermes-nicegui",
-        "type": "path"
-      },
-      "parent": []
+        "owner": "hermes-3640",
+        "repo": "hermes-nicegui",
+        "type": "github"
+      }
     },
     "home-manager": {
       "inputs": {

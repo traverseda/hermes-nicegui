@@ -37,7 +37,7 @@
     # themselves — modules/hermes-nicegui.nix and modules/xaelwiki.nix
     # build a package from the fetched source.
     hermes-nicegui-src = {
-      url = "./vendor/hermes-nicegui";
+      url = "github:hermes-3640/hermes-nicegui";
       flake = false;
     };
     xaelwiki-src = {
