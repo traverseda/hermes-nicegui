@@ -831,7 +831,7 @@ def register_pages(plugin: Plugin) -> None:
                     ui.input(placeholder="Search")
                     .props("outlined dense clearable")
                     .classes("flex-grow")
-                    .on("change", lambda: _search_or_source_changed())
+                    .on("update:model-value", lambda: _search_or_source_changed())
                 )
                 source_filter = (
                     ui.select(SOURCES, value="")
