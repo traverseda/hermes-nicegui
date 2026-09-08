@@ -244,9 +244,8 @@ in
       };
     };
 
-    # Install the recovery script in the system packages so it's
-    # discoverable, and also expose the `hermes-recovery` CLI for manual runs.
-    systemPackages = [
+    # Expose `hermes-recovery` CLI for manual trigger runs.
+    environment.systemPackages = [
       (pkgs.writeShellScriptBin "hermes-recovery" ''
         exec systemctl start hermes-emergency-recovery.service
       '')
