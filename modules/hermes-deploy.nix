@@ -434,7 +434,7 @@ let
           let f = cfg.activationFiles.${key};
           in "${strip f.source}\t${strip f.dest}\t${strip f.mode}\t${strip f.owner}\t${strip f.group}"
         ) names;
-      in lib.concatStringsSep "\n" entries + "\n";
+      in (lib.concatStringsSep "\n" entries) + "\n";
   };
 
   # Activation script that syncs activation-managed files from the
