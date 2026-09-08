@@ -89,6 +89,9 @@
     # The operator must apply a "reviewed" tag or "Reviewed-by:" trailer
     # before the deploy proceeds.  See docs/review-gate.md for the workflow.
     requireReview = true;
+    # Deploy audit trail: JSON-lines log of all deploy outcomes (who approved,
+    # what changed, when, generation). See docs/review-gate.md.
+    deployAuditLog = "/var/lib/hermes-deploy/state/deploy-audit.log";
     # R3 (ticket t_012f76dd) e2e demo: register a scratch file so the
     # activationFiles mechanism is exercised during the real deploy cycle.
     activationFiles = {

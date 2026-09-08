@@ -460,6 +460,30 @@ let
     done < ${activationManifest}
   '';
 
+  # ── Deploy audit logging function ────────────────────────────────────
+  # Writes a JSON-lines record to the deploy audit log at every verdict
+  # (success, rollback, validation-failed, pre-check-failed, review-blocked,
+  # content-recovery). Fields: timestamp, status, generation, prev_generation,
+  # review_approved, files_changed (diffstat), health_check_failures.
+  auditLogFn = ''
+    audit_deploy() {
+      local status="$1" review_approved="$2" gen="$3" health_fail="$4"
+      local files_changed
+      files_changed=$(git -C ${cfg.repoDir} diff --stat HEAD~1 2>/dev/null || echo "unknown")
+      local review_approver=""
+      if [ "$review_approved" = "true" ]; then
+        review_approver=$(git -C ${cfg.repoDir} log --format="%an <%ae>" -1 -- .review-approved 2>/dev/null || echo "unknown")
+      fi
+      local ts
+      ts=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
+      local prev_gen="${PREV_GEN:-unknown}"
+      cat >> ${cfg.deployAuditLog} <<AUDIT_EOF
+{"timestamp":"${ts}","status":"${status}","generation":"${gen}","prev_generation":"${prev_gen}","review_approved":"${review_approved}","review_approver":"${review_approver}","files_changed":"${files_changed//\"/\\\"}","health_check_failures":"${health_fail}"}
+AUDIT_EOF
+      log "audit: ${status} recorded at ${ts} (gen ${gen})"
+    }
+  '';
+
   # ── Deploy script ────────────────────────────────────────────────────
   # Build, switch, health-check, rollback if unhealthy.
   deployScript = pkgs.writeShellScript "hermes-deploy-script" ''
@@ -476,6 +500,7 @@ let
     log() { echo "[hermes-deploy] $*"; }
     ${gitSyncFns}
     ${deliverFn}
+    ${auditLogFn}
 
     # No git remote: the checkout in ${cfg.repoDir} IS the source of truth.
     # The operator pushes a fresh copy (scripts/deploy.sh rsyncs it), and the
@@ -505,6 +530,7 @@ let
       log "Run 'nix flake check --no-build' to see the full error."
       log "Common fix: commit/push to the fork reop, then `nix flake lock --update-input hermes-agent` (or the equivalent nicegui/xaelwiki input), commit flake.lock, and re-deploy."
       deliver_callback 1 "validation-failed" ""
+      audit_deploy "validation-failed" "false" "" "0"
       exit 1
     fi
     log "validation passed"
@@ -517,6 +543,7 @@ let
       if ! ${pre} 2>&1 | tee -a /var/log/hermes-deploy.log; then
         log "deploy pre-check FAILED — aborting deploy"
         deliver_callback 1 "pre-check-failed" ""
+        audit_deploy "pre-check-failed" "false" "" "0"
         exit 1
       fi
       log "deploy pre-check passed: ${pre}"
@@ -539,6 +566,7 @@ let
         log ""
         log "  This gate prevents unreviewed changes from being deployed."
         deliver_callback 1 "review-blocked" ""
+        audit_deploy "review-blocked" "false" "" "0"
         exit 1
       fi
     ''}
@@ -561,6 +589,7 @@ let
       echo "deploy OK (generation $CUR_GEN)"
       echo "$CUR_GEN" > ${cfg.stateDir}/last-known-good
       deliver_callback 0 "success" "$CUR_GEN"
+      audit_deploy "success" "true" "$CUR_GEN" "0"
       exit 0
     fi
 
@@ -578,6 +607,7 @@ let
           echo "content recovery restored health (generation $CUR_GEN)"
           echo "$CUR_GEN" > ${cfg.stateDir}/last-known-good
           deliver_callback 0 "content-recovery" "$CUR_GEN"
+          audit_deploy "content-recovery" "true" "$CUR_GEN" "0"
           exit 0
         fi
         log "content recovery did not fix"
@@ -595,6 +625,7 @@ let
     fi
     sync_repo_to_gen "$ROLLED_TO"
     deliver_callback 1 "rollback" "$ROLLED_TO"
+    audit_deploy "rollback" "true" "$ROLLED_TO" "$failed_count"
     exit 1
   '';
 
@@ -811,6 +842,18 @@ in
 
         When false, deploys proceed without review (default for backward
         compatibility).
+      '';
+    };
+
+    # ── Deploy audit trail ─────────────────────────────────────────────
+    deployAuditLog = lib.mkOption {
+      type = lib.types.path;
+      default = "/var/lib/hermes-deploy/state/deploy-audit.log";
+      description = ''
+        Path to the JSON-lines audit log for all deploy attempts.
+        Each line is a JSON object with: timestamp, status (success/rollback/validation-failed/pre-check-failed/review-blocked/content-recovery),
+        generation, files_changed (git diffstat), health_check_failures, and
+        review_approved (boolean).
       '';
     };
 
