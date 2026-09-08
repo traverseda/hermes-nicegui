@@ -423,6 +423,14 @@
   # by 3h (4h in AST). With the box on the user's TZ, `datetime.date.today()`
   # and cron exprs mean LOCAL wall time year-round, DST included.
   time.timeZone = "America/Halifax";
+
+  # ── User linger ──────────────────────────────────────────────────────
+  # Linger ensures a real user systemd manager (not just "manager-early")
+  # and a user D-Bus session bus are running for the hermes user even when
+  # no one logs in interactively. This is required for cronjobs that use
+  # systemd-run --user --scope (restart-safe dispatch) — the
+  # hermes-nicegui E2E monitor, shepherd-window, fitness targets, etc.
+  users.users.hermes.linger = true;
   system.stateVersion = "26.05";
 
   # ── NixOS dynamic linker ────────────────────────────────────────────
