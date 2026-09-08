@@ -1,7 +1,0 @@
-# Review approval marker
-#
-# The presence of this file signals that a human operator has reviewed the
-# changes in the current working tree and approved them for deployment.
-#
-# Created by: hermes-deploy
-# Date: 2026-09-08
