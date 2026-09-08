@@ -8,7 +8,7 @@ result-*
 *.img
 
 # Local vendor checkouts (no longer git submodules — plain source trees for editing)
-vendor/
+#vendor/
 
 # Local secret decryption intermediates
 secrets/*.tmp
