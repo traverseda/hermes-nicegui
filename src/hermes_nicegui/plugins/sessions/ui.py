@@ -929,6 +929,7 @@ def register_pages(plugin: Plugin) -> None:
                                 f"Chat with '{s.title or s.id}'"
                             )
                             ui.button(
+                                "Rename",
                                 icon="edit",
                             ).props("flat dense size=sm").on(
                                 "click.stop",
