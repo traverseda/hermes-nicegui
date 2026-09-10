@@ -79,9 +79,12 @@ if [[ ! -d "$TMP/$GITHUB_REPO" ]]; then
     die "Failed to clone https://github.com/traverseda/$GITHUB_REPO — is the fork public?"
 fi
 
-# Copy the current source tree into the fork
-cp -a "$REPO_DIR/vendor/$PACKAGE/." "$TMP/$GITHUB_REPO/" 2>/dev/null || \
-  die "No source found at $REPO_DIR/vendor/$PACKAGE — clone the fork to get started"
+# Copy the current source tree into the fork (vendor/ was removed in the
+# submodule→GitHub migration; if present, copy it in; otherwise just use
+# whatever the fork's main branch has).
+if [[ -d "$REPO_DIR/vendor/$PACKAGE" ]]; then
+  cp -a "$REPO_DIR/vendor/$PACKAGE/." "$TMP/$GITHUB_REPO/" 2>/dev/null || true
+fi
 
 cd "$TMP/$GITHUB_REPO"
 git config user.name "hermes-deploy"
