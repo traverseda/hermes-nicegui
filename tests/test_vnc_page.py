@@ -26,9 +26,17 @@ from hermes_nicegui.plugins.vnc import VncPlugin
 from hermes_nicegui.plugins.vnc.logic import register_routes
 
 
-def _make_vnc_plugin(tmp_path: Path) -> VncPlugin:
-    settings = Settings(vnc_password_file=str(tmp_path / "passwd"), vnc_state_dir=str(tmp_path))
+def _make_vnc_plugin(tmp_path: Path, *, vnc_port: int = 59999) -> VncPlugin:
+    settings = Settings(vnc_password_file=str(tmp_path / "passwd"), vnc_state_dir=str(tmp_path), vnc_port=vnc_port)
     return VncPlugin(PluginContext(settings=settings, logger=logger, executor=HermesExecutor()))
+
+
+def _make_novnc_dir(tmp_path: Path) -> Path:
+    """Create a minimal noVNC directory structure for happy-path tests."""
+    core_dir = tmp_path / "core"
+    core_dir.mkdir(parents=True)
+    (core_dir / "rfb.js").write_text("")  # minimal file
+    return tmp_path
 
 
 # -- page rendering ------------------------------------------------------------
@@ -42,12 +50,14 @@ async def test_vnc_nav_item_present(user: User, tmp_path, make_context) -> None:
 
 
 async def test_vnc_page_renders(user: User, tmp_path, make_context) -> None:
-    context = make_context(vnc_state_dir=str(tmp_path), vnc_novnc_dir="")
+    novnc_dir = _make_novnc_dir(tmp_path / "novnc")
+    context = make_context(vnc_state_dir=str(tmp_path), vnc_novnc_dir=str(novnc_dir), vnc_port=59999)
     web.build(context, [VncPlugin(context)])
     await user.open("/vnc")
     await user.should_see("VNC viewer")
     await user.should_see("display offline")
     assert user.find(marker="vnc-connect-button").elements
+    assert user.find(marker="vnc-canvas").elements  # canvas present when assets OK
 
 
 async def test_vnc_page_renders_without_novnc_assets(user: User, tmp_path, make_context) -> None:
