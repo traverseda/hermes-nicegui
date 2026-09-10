@@ -24,6 +24,13 @@ let
     TIMESTAMP=$(date -Iseconds)
     LOGFILE="$LOG.$(date +%Y%m%d)"
 
+    # Ensure the daily log file exists and is writable (root writes via
+    # systemd's LogsDirectory=/var/log/hermes-recovery but we log to
+    # /var/log for operator convenience; ProtectSystem=strict means we
+    # can't touch /var/log at runtime without ReadWritePaths).
+    touch "$LOGFILE" 2>/dev/null || true
+    # Ensure the log dir is writable by root (ProtectSystem=strict +
+    # ReadWritePaths includes /var/log)
     log() { echo "[$TIMESTAMP] $*" | tee -a "$LOGFILE"; }
 
     log "=== Emergency recovery check started ==="
