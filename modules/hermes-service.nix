@@ -266,16 +266,16 @@ in
           # hermes-nicegui is immutable — sourced from the Nix store, not
           # a live-editable vendor checkout.
           if [[ -d /var/lib/hermes-deploy/vendor/hermes-nicegui ]]; then
-            VENDOR_WARN="${VENDOR_WARN}WARNING: /var/lib/hermes-deploy/vendor/hermes-nicegui exists but should not — vendor/ was removed in the submodule→GitHub migration. Edit via vendor-deploy hermes-nicegui instead.\n"
+            VENDOR_WARN="$VENDOR_WARNWARNING: /var/lib/hermes-deploy/vendor/hermes-nicegui exists but should not — vendor/ was removed in the submodule→GitHub migration. Edit via vendor-deploy hermes-nicegui instead.\n"
           fi
           # xaelWiki source — same story.
           if [[ -d /var/lib/hermes-deploy/vendor/xaelWiki ]]; then
-            VENDOR_WARN="${VENDOR_WARN}WARNING: /var/lib/hermes-deploy/vendor/xaelWiki exists but should not — vendor/ was removed in the submodule→GitHub migration.\n"
+            VENDOR_WARN="$VENDOR_WARNWARNING: /var/lib/hermes-deploy/vendor/xaelWiki exists but should not — vendor/ was removed in the submodule→GitHub migration.\n"
           fi
           # hermes-agent is consumed as a Nix flake input (flake fetches it
           # into the Nix store at build time); no local vendor checkout.
           if [[ -d /var/lib/hermes-deploy/vendor/hermes-agent ]]; then
-            VENDOR_WARN="${VENDOR_WARN}WARNING: /var/lib/hermes-deploy/vendor/hermes-agent exists but should not — vendor/ was removed in the submodule→GitHub migration.\n"
+            VENDOR_WARN="$VENDOR_WARNWARNING: /var/lib/hermes-deploy/vendor/hermes-agent exists but should not — vendor/ was removed in the submodule→GitHub migration.\n"
           fi
           if [[ -n "$VENDOR_WARN" ]]; then
             echo "$VENDOR_WARN" >&2
