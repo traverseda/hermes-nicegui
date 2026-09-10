@@ -71,6 +71,7 @@ class FakeHermes:
         self.sessions: list[dict] = []
         self.messages: dict[str, list[dict]] = {}
         self.stream_events: list[tuple[str, dict]] = []
+        self.stream_error: int | None = None
         self.jobs: list[dict] = []
         # Per-test knobs: a >0 stream_delay dribbles SSE events out slowly so
         # tests can exercise mid-stream controls (stop, queue); stop_calls
@@ -220,6 +221,8 @@ class FakeHermes:
         if method == "POST" and path.endswith("/chat/stream"):
             sid = path.split("/")[3]
             body = json.loads(request.content) if request.content else {}
+            if self.stream_error is not None:
+                return self._json({"error": self.stream_error}, status=self.stream_error)
             self._record_turn(sid, body.get("input", ""))
             self._mirror_turn(sid, body.get("input", ""))
             if self.stream_delay > 0:

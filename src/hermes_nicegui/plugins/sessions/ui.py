@@ -1482,6 +1482,7 @@ def register_pages(plugin: Plugin) -> None:
                 _sync_streaming_controls()
                 _update_running_indicator(True)
                 sent_at = datetime.now().timestamp()
+                self_user_id: int | None = None
                 if own_local_ids:
                     turn_local_ids: set[int] = set(own_local_ids)
                     # Exclude user message ids from turn_local_ids — the
@@ -1492,8 +1493,10 @@ def register_pages(plugin: Plugin) -> None:
                     user_ids = {m.id for m in loaded_messages if m.role == "user"}
                     turn_local_ids -= user_ids
                 else:
-                    _append_local_message("user", text, sent_at)
-                    turn_local_ids = set()  # Don't track user message id
+                    # Track the local user-message id so a failure can roll it
+                    # back (Option B: rollback on failure).
+                    self_user_id = _append_local_message("user", text, sent_at)
+                    turn_local_ids: set[int] = set()  # Don't track user message id
                 # A plain non-None list (Message.tool_calls is `list | None`);
                 # `pending.tool_calls` is assigned this same object so the
                 # buffer render sees every append.
@@ -1512,6 +1515,13 @@ def register_pages(plugin: Plugin) -> None:
                 active_message_id = pending.id
                 tool_status = {}
                 handles: dict[int, LiveEntry] = {}
+                # Capture the locally-rendered message ids for rollback on
+                # send failure (self_user_id is only meaningful on the first
+                # call where own_local_ids is None).
+                local_message_ids: list[int] = []
+                if self_user_id is not None:
+                    local_message_ids.append(self_user_id)
+                local_message_ids.append(pending.id)
                 try:
                     # Show this turn's own new user bubble (or drop the
                     # "Queued" badge, if `own_local_ids` names an
@@ -1703,6 +1713,18 @@ def register_pages(plugin: Plugin) -> None:
                                     handles = _render_live()
                                     _scroll_to_bottom(transcript)
                     except HermesError as exc:
+                        # Rollback: remove locally-rendered messages that never
+                        # reached the gateway, and restore the input box so the
+                        # user can retry without manually clearing the ghost text.
+                        try:
+                            loaded_messages[:] = [
+                                m for m in loaded_messages if m.id not in local_message_ids
+                            ]
+                        except Exception:
+                            pass  # best effort — page may be torn down
+                        _render_history()
+                        _scroll_to_bottom(transcript)
+                        message_input.set_value(text)
                         ui.notify(f"Message failed: {exc}", type="negative")
                 finally:
                     current_run_id = None
