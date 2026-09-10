@@ -20,17 +20,11 @@ let
   recoveryScript = pkgs.writeShellScript "hermes-emergency-recovery" ''
     set -uo pipefail
 
-    LOG="/var/log/hermes-emergency-recovery.log"
+    LOG="/var/log/hermes-recovery/hermes-emergency-recovery.log"
     TIMESTAMP=$(date -Iseconds)
     LOGFILE="$LOG.$(date +%Y%m%d)"
+    mkdir -p "$(dirname "$LOGFILE")"
 
-    # Ensure the daily log file exists and is writable (root writes via
-    # systemd's LogsDirectory=/var/log/hermes-recovery but we log to
-    # /var/log for operator convenience; ProtectSystem=strict means we
-    # can't touch /var/log at runtime without ReadWritePaths).
-    touch "$LOGFILE" 2>/dev/null || true
-    # Ensure the log dir is writable by root (ProtectSystem=strict +
-    # ReadWritePaths includes /var/log)
     log() { echo "[$TIMESTAMP] $*" | tee -a "$LOGFILE"; }
 
     log "=== Emergency recovery check started ==="
@@ -228,7 +222,7 @@ in
         LogsDirectory = "hermes-recovery";
         PrivateTmp = true;
         ProtectSystem = "strict";
-        ReadWritePaths = "${hermesHome} /var/log";
+        ReadWritePaths = "${hermesHome} /var/log/hermes-recovery";
         # Inherit the hermes-agent PATH (includes opencode) so recovery
         # commands work without relying on /etc/profile or a broken Path key.
         # Opencode lives in the hermes user's profile (not a system package),
