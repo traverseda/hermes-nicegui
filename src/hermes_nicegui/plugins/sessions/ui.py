@@ -929,7 +929,7 @@ def register_pages(plugin: Plugin) -> None:
                         # Metadata row: model badge, source name, message count, session ID
                         with ui.row().classes("items-center gap-1 q-mt-xs"):
                             if s.model:
-                                ui.badge(s.model, color="grey-7", size="xs").tooltip(s.model)
+                                ui.badge(s.model, color="grey-7").tooltip(s.model)
                             source_label = SOURCES.get(s.source, s.source or "unknown")
                             ui.label(source_label).classes("text-xs opacity-50")
                             if s.message_count:
