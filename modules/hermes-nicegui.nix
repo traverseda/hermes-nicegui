@@ -76,6 +76,10 @@ let
       $out/src/hermes_nicegui/plugins/sessions/ui.py
     sed -i 's/"flat round dense size=sm"/"flat round dense"/g' \
       $out/src/hermes_nicegui/plugins/sessions/ui.py
+    # Fix NiceGUI 3.16.0: ui.badge() dropped the size parameter, crash on
+    # session list render when sessions have a model set.
+    sed -i 's/color="grey-7", size="xs"/color="grey-7"/g' \
+      $out/src/hermes_nicegui/plugins/sessions/ui.py
     # Fix VNC noVNC path: HERMES_VNC_NOVNC_DIR is already set by the Nix flake
     # to the full path (e.g. /nix/store/.../share/webapps/novnc), so the code
     # was double-appending /share/webapps/novnc and assets_ok was always False.
