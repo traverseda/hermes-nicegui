@@ -75,6 +75,16 @@ _RUNNING_ICON_CSS = """
   animation: kanban-running-spin 1.5s linear infinite;
   display: inline-block;
 }
+
+.kanban-my-task {
+  background: rgba(79, 70, 229, 0.12);
+  border-left: 3px solid var(--q-primary);
+}
+
+:deep(.q-item--dark) .kanban-my-task {
+  background: rgba(165, 158, 239, 0.2);
+  border-left-color: var(--q-primary);
+}
 """
 
 
@@ -295,10 +305,10 @@ def register_pages(plugin: Plugin) -> None:
 
             def render_task_row(task: Task) -> None:
                 label, icon, color = column_meta(task.status)
-                with (
-                    ui.item(on_click=partial(ui.navigate.to, f"/kanban/{task.id}"))
-                    .props("v-ripple clickable")
-                    .mark("task-card")
+                with (\
+                    (row := ui.item(on_click=partial(ui.navigate.to, f"/kanban/{task.id}")))\
+                    .props("v-ripple clickable")\
+                    .mark("task-card")\
                 ):
                     with ui.item_section().props("avatar"):
                         status_icon = ui.icon(icon, color=color).mark("task-status-icon")
@@ -313,6 +323,9 @@ def register_pages(plugin: Plugin) -> None:
                         ui.badge(label, color=color)
                         if task.comment_count:
                             ui.badge(str(task.comment_count), color="grey")
+                    # Highlight tasks assigned to the logged-in user
+                    if task.assignee and task.assignee == web.current_username():
+                        row.classes("kanban-my-task")
 
             def render_list() -> None:
                 list_container.clear()
