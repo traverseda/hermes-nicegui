@@ -20,10 +20,9 @@ let
   recoveryScript = pkgs.writeShellScript "hermes-emergency-recovery" ''
     set -uo pipefail
 
-    LOG="/var/log/hermes-recovery/hermes-emergency-recovery.log"
+    LOG="/tmp/hermes-emergency-recovery.log"
     TIMESTAMP=$(date -Iseconds)
     LOGFILE="$LOG.$(date +%Y%m%d)"
-    mkdir -p "$(dirname "$LOGFILE")"
 
     log() { echo "[$TIMESTAMP] $*" | tee -a "$LOGFILE"; }
 
@@ -218,11 +217,9 @@ in
         ExecStart = "${recoveryScript}";
         # Don't let the recovery script wedge the system — hard timeout.
         TimeoutStartSec = 600;  # 10 minutes max
-        StateDirectory = "hermes-recovery";
-        LogsDirectory = "hermes-recovery";
         PrivateTmp = true;
         ProtectSystem = "strict";
-        ReadWritePaths = "${hermesHome} /var/log/hermes-recovery";
+        ReadWritePaths = "${hermesHome} /var/log";
         # Inherit the hermes-agent PATH (includes opencode) so recovery
         # commands work without relying on /etc/profile or a broken Path key.
         # Opencode lives in the hermes user's profile (not a system package),
