@@ -254,6 +254,32 @@ in
             fi
           done
           echo "OK: agenix environment validated"
+
+          # ── Vendor/plugin path sanity check ─────────────────────────────
+          # After the submodule→GitHub migration, vendor/ directories no
+          # longer exist on disk. Agents that still try to edit
+          # vendor/hermes-nicegui/ get stuck in failure loops. Verify at
+          # startup that the expected paths are either the new immutable
+          # Nix store paths (hermes-nicegui) or the GitHub fork repos
+          # (hermes-agent, xaelWiki), and flag anything stale.
+          VENDOR_WARN=""
+          # hermes-nicegui is immutable — sourced from the Nix store, not
+          # a live-editable vendor checkout.
+          if [[ -d /var/lib/hermes-deploy/vendor/hermes-nicegui ]]; then
+            VENDOR_WARN="${VENDOR_WARN}WARNING: /var/lib/hermes-deploy/vendor/hermes-nicegui exists but should not — vendor/ was removed in the submodule→GitHub migration. Edit via vendor-deploy hermes-nicegui instead.\n"
+          fi
+          # xaelWiki source — same story.
+          if [[ -d /var/lib/hermes-deploy/vendor/xaelWiki ]]; then
+            VENDOR_WARN="${VENDOR_WARN}WARNING: /var/lib/hermes-deploy/vendor/xaelWiki exists but should not — vendor/ was removed in the submodule→GitHub migration.\n"
+          fi
+          # hermes-agent is consumed as a Nix flake input (flake fetches it
+          # into the Nix store at build time); no local vendor checkout.
+          if [[ -d /var/lib/hermes-deploy/vendor/hermes-agent ]]; then
+            VENDOR_WARN="${VENDOR_WARN}WARNING: /var/lib/hermes-deploy/vendor/hermes-agent exists but should not — vendor/ was removed in the submodule→GitHub migration.\n"
+          fi
+          if [[ -n "$VENDOR_WARN" ]]; then
+            echo "$VENDOR_WARN" >&2
+          fi
         '';
       };
       # Restart the gateway when these markers change between generations.
