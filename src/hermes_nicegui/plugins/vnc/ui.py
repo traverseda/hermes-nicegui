@@ -119,7 +119,7 @@ def register_pages(plugin: VncPlugin) -> None:
     settings = plugin.settings
     state_path = Path(settings.vnc_state_dir) / "state.json"
 
-    novnc_dir = Path(settings.vnc_novnc_dir) / "share" / "webapps" / "novnc"
+    novnc_dir = Path(settings.vnc_novnc_dir)
     assets_ok = novnc_dir.is_dir()
     if assets_ok:
         app.add_static_files("/vnc/static", novnc_dir)
