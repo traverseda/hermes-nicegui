@@ -173,12 +173,44 @@ class SessionsStore:
         return [Session.from_json(row) for row in rows], total
 
     async def get_session(self, session_id: str) -> Session:
+        """Find a session by ID, searching across all available profiles.
+
+        Sessions from sources like ``cron``, ``kanban``, and
+        ``api_server`` are stored in the root ``state.db``, not in
+        profile-scoped DBs.  This method searches across all profiles to
+        ensure root-level sessions are always accessible regardless of
+        which profile is active in the UI.
+        """
+        # Try current profile first
         rows = await self.executor.read_sqlite(
             "state.db", _SESSION_ROW_SQL, (session_id,), profile=self.profile
         )
-        if not rows:
-            raise HermesError(f"session {session_id} not found")
-        return Session.from_json(rows[0])
+        if rows:
+            return Session.from_json(rows[0])
+
+        # Session not found in current profile - search the root profile
+        if self.profile != "":
+            rows = await self.executor.read_sqlite(
+                "state.db", _SESSION_ROW_SQL, (session_id,), profile=""
+            )
+            if rows:
+                return Session.from_json(rows[0])
+
+        # Search other named profiles
+        try:
+            profiles = await self.executor.list_profile_names()
+            for profile in profiles:
+                if profile == self.profile or not profile:
+                    continue
+                rows = await self.executor.read_sqlite(
+                    "state.db", _SESSION_ROW_SQL, (session_id,), profile=profile
+                )
+                if rows:
+                    return Session.from_json(rows[0])
+        except Exception:
+            pass
+
+        raise HermesError(f"session {session_id} not found")
 
     async def get_messages_page(
         self,
@@ -191,13 +223,33 @@ class SessionsStore:
         chronological order (what the transcript renders in) -- `before_id`
         is the smallest `id` already loaded, so the *next* call walks
         further back in history. `has_more=True` means an older page still
-        exists (a "Load earlier" control has something to fetch)."""
-        rows = await self.executor.read_sqlite(
-            "state.db",
-            _SESSION_MESSAGES_PAGE_SQL,
-            {"session_id": session_id, "before_id": before_id, "limit": limit + 1},
-            profile=self.profile,
-        )
+        exists (a "Load earlier" control has something to fetch).
+
+        Searches across all profiles for the session's ``state.db`` so that
+        root-level sessions (cron, kanban, api_server) are accessible even
+        when browsing from a named profile.
+        """
+        # Find which profile's DB holds this session's messages
+        profiles_to_try = [self.profile]
+        if self.profile != "":
+            profiles_to_try.append("")
+        try:
+            profiles_to_try.extend(await self.executor.list_profile_names())
+        except Exception:
+            pass
+
+        rows: list[dict] = []
+        for p in profiles_to_try:
+            if rows:
+                break
+            rows = await self.executor.read_sqlite(
+                "state.db",
+                _SESSION_MESSAGES_PAGE_SQL,
+                {"session_id": session_id, "before_id": before_id, "limit": limit + 1},
+                profile=p,
+            )
+        if not rows:
+            return [], False
         has_more = len(rows) > limit
         rows = rows[:limit]
         rows.reverse()
