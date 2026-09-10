@@ -95,15 +95,15 @@
     "hermes-nicegui-src": {
       "flake": false,
       "locked": {
-        "lastModified": 1789038153,
-        "narHash": "sha256-ieg1yVakEOUrHQ0AW6PKa4EuMVi0FgvcL21D9SUBPv8=",
-        "owner": "hermes-3640",
+        "lastModified": 1789043949,
+        "narHash": "sha256-hFOH7zLGbex6JugXd35ywpOz/GfNG0VjtQ+G8tlxM2Y=",
+        "owner": "traverseda",
         "repo": "hermes-nicegui",
-        "rev": "f68ff89e58177e1c1e060a94c77ad5abe18593aa",
+        "rev": "a1a25fc84c778db2d9f5634ec9d76840b6d4028c",
         "type": "github"
       },
       "original": {
-        "owner": "hermes-3640",
+        "owner": "traverseda",
         "ref": "main",
         "repo": "hermes-nicegui",
         "type": "github"
@@ -153,11 +153,11 @@
     },
     "nixpkgs": {
       "locked": {
-        "lastModified": 1788614874,
-        "narHash": "sha256-7QYjT2vHLuX9Z1pdxHXDKCbh1CR3D/2rywB9Tx0MPRg=",
+        "lastModified": 1789006805,
+        "narHash": "sha256-xB8mKMOx1IA9vTDNLmJZ6n4wCMq/cuWBBOzGCRnqxrU=",
         "owner": "NixOS",
         "repo": "nixpkgs",
-        "rev": "c043004d1c6985732bcc1cbc5a9c9aecbbb4e0f0",
+        "rev": "8ce4ef6cb6f871616146b9fe26d2a5ae594e94fe",
         "type": "github"
       },
       "original": {
