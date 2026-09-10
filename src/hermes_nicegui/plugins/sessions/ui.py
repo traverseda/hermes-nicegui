@@ -778,6 +778,40 @@ def register_pages(plugin: Plugin) -> None:
 
         _run_in_client(do_rename)
 
+    def _make_rename_click(
+        session_id: str, title_label: ui.label, current_title: str
+    ) -> Callable[[], None]:
+        """Factory that returns a click handler capturing the right context."""
+        def on_click() -> None:
+            _show_rename_dialog(session_id, current_title, title_label)
+        return on_click
+
+    def _show_rename_dialog(
+        session_id: str, current_title: str, title_label: ui.label | None = None
+    ) -> None:
+        """Open a rename dialog with an input field and Save/Cancel buttons."""
+        with ui.dialog() as dialog, ui.card().classes("w-full max-w-xs"):
+            ui.label("Rename Session").classes("text-lg font-bold")
+            rename_input = ui.input(
+                value=current_title, placeholder="New session name"
+            ).props("outlined dense").classes("flex-grow")
+
+            def _on_save() -> None:
+                new_title = rename_input.value or current_title
+                _rename(
+                    session_id,
+                    new_title,
+                    lambda: (title_label.set_text(new_title or session_id), dialog.close()),
+                )
+
+            with ui.row().classes("w-full justify-end gap-2"):
+                ui.button("Cancel", on_click=dialog.close).props("flat")
+                ui.button(
+                    "Save", icon="check", on_click=_on_save
+                ).props("unelevated")
+
+        dialog.open()
+
     def _delete(session_id: str, on_deleted: Callable[[], Any] | None) -> None:
         async def do_delete() -> None:
             try:
@@ -1068,12 +1102,14 @@ def register_pages(plugin: Plugin) -> None:
                         "Open interactive chat for this session"
                     )
                 with ui.row().classes("items-center gap-2"):
-                    ui.label("Rename").classes("text-caption font-bold")
-                    rename_input = ui.input(
-                        value=session.title,
-                        placeholder=session.title or "Click to type new name",
-                        on_change=lambda e: _rename(session_id, e.value or "", None),
-                    ).props("outlined dense").classes("flex-grow")
+                    session_title_label = ui.label(session.title or session.id)
+                    ui.button(
+                        "Rename",
+                        icon="edit",
+                        on_click=_make_rename_click(session_id, session_title_label, session.title or ""),
+                    ).props("flat dense size=sm").mark(
+                        "rename-session-button"
+                    ).tooltip("Rename session")
                     ui.button(
                         "Delete",
                         icon="delete",
