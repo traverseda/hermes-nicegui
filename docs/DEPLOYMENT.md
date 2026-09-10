@@ -55,16 +55,20 @@ git push box main              # pushes to the LXC repo
 remote repo at `/var/lib/hermes-deploy` on the LXC. Azrael does not need to
 `SSH` hermes separately for the push — Git's SSH transport handles it.
 
-### 2. Update submodules (if needed)
+### 2. Update vendored source inputs (if needed)
 
 ```bash
-# On azrael:
-# If you modified a submodule (hermes-agent, hermes-nicegui, xaelWiki):
-cd vendor/hermes-agent
+# Vendor source is consumed as GitHub flake inputs — no local checkout.
+# Push to the fork first, then update flake.lock:
+TEMPDIR=$(mktemp -d)
+git clone git@github.com:traverseda/hermes-nicegui.git "$TEMPDIR/hermes-nicegui"
+cd "$TEMPDIR/hermes-nicegui"
 git add -A && git commit -m "fix: ..."
-cd ../..
-git add vendor/hermes-agent flake.lock
-git commit -m "hermes-agent: bump to foo"
+git push origin main
+cd /home/traverseda/Code/personal/hermes-deploy
+nix flake lock --update-input hermes-nicegui-src
+git add flake.lock
+git commit -m "hermes-nicegui-src: bump to foo"
 git push box main
 ```
 
@@ -106,8 +110,9 @@ The deploy flow is:
 - **Azrael**: `git commit` + `git push box main` → hermes has the code
 - **Hermes**: `git pull box main` + `nixos-rebuild switch --flake .#hermes`
 
-Nix fetches hermes-agent from the `vendor/hermes-agent` path inside the repo on the LXC when building, so the LXC repo must have the correct submodule checkouts.
-checkouts.
+Nix fetches hermes-nicegui from `github:traverseda/hermes-nicegui/main` as a
+flake input — no local checkout or submodule needed. The build machine clones
+it into the Nix store at build time.
 
 ## Troubleshooting
 
@@ -149,18 +154,17 @@ grep "hermes-config.yaml" /nix/store/*/activate 2>/dev/null | head -1
 ```
 
 ### Submodule errors on hermes pull
-Hermes's submodule remotes point to GitHub. If fetching submodules fails:
+
+Vendor checkouts have been migrated from local submodules to GitHub flake
+inputs (see `AGENTS.md` "Editing vendored source"). If you see stale
+submodule errors, clean them:
+
 ```bash
-# On hermes, clone each submodule manually:
-cd /var/lib/hermes-deploy/vendor/hermes-agent
-git fetch --all 2>&1 || git pull origin main 2>&1
-cd ../hermes-nicegui
-git fetch --all 2>&1 || git pull origin main 2>&1
-cd ../xaelWiki
-git fetch --all 2>&1 || git pull origin main 2>&1
-# Then re-pull the outer repo
 cd /var/lib/hermes-deploy
-git pull box main --recurse-submodules
+# Remove stale submodule entries if any remain
+git config --remove-section submodule.vendor/hermes-nicegui 2>/dev/null || true
+git rm --cached vendor/hermes-nicegui 2>/dev/null || true
+git commit -m "cleanup: remove stale submodule reference"
 ```
 
 ## Quick reference: azrael → hermes

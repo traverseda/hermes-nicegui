@@ -166,9 +166,9 @@ provisioned.
 - **nixos-anywhere wipes the disk.** Confirm the target is disposable before
   running. Use `--phases disko` with `--disko-mode format` (or a VM test:
   `--vm-test`) if you want to rehearse without destroying the target.
-- **Submodules.** After cloning the fork onto the new box, run
-  `git submodule update --init` (the deploy unit does this, but a manual clone
-  does not) or `vendor/xaelWiki` won't materialize.
+- **Flake inputs, not submodules.** After cloning the fork onto the new box, run
+  `nix flake lock --update-input <input>` to ensure the correct GitHub URLs are
+  pinned. The deploy unit fetches vendored sources from their forks at build time.
 - **Hardware.** Different machines need different `disko.devices` and the
   facter.json is per-machine; don't copy a friend's facter.json to another
   friend.

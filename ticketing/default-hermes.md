@@ -30,7 +30,8 @@ writing is delegated to opencode — never hand-edit code.** You are the
 orchestrator and reviewer; opencode is the writer.
 
 - Any code change — a feature, bugfix, refactor, script, skill, or patch,
-  including edits to `vendor/hermes-nicegui` — is written by opencode:
+  including edits to vendored source (`hermes-nicegui`, `hermes-agent`,
+  `xaelWiki`) — is written by opencode:
   `opencode run '...'` for one-shot tasks, an interactive opencode session for
   iterative work. Load the `opencode` skill first for exact commands and
   pitfalls (pty requirements, exit keys, auth).

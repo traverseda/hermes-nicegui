@@ -1,0 +1,23 @@
+Fix session row navigation to use JS-side click handler
+
+The Python-side on_click on ui.item does not produce a working DOM
+click handler in NiceGUI v3, so session row clicks fail to navigate
+to session detail. Replace with JS-side .on('click', ...) to match
+the pattern used by the chat/rename/delete buttons on the same rows.
+---
+ src/hermes_nicegui/plugins/sessions/ui.py | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/src/hermes_nicegui/plugins/sessions/ui.py b/src/hermes_nicegui/plugins/sessions/ui.py
+index abc1234..def5678 100644
+--- a/src/hermes_nicegui/plugins/sessions/ui.py
++++ b/src/hermes_nicegui/plugins/sessions/ui.py
+@@ -881,7 +881,7 @@ class SessionsPlugin(Plugin):
+                     dialog.open()
+ 
+                 with (
+-                    ui.item(on_click=partial(ui.navigate.to, f"/sessions/{s.id}"))
++                    ui.item().on("click", partial(ui.navigate.to, f"/sessions/{s.id}"))
+                     .props("clickable v-ripple")
+                     .mark("session-row")
+                 ):
