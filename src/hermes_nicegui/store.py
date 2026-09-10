@@ -45,7 +45,7 @@ from hermes_nicegui.gateway import (
 # in Python did.
 _SESSIONS_LIST_SQL = """
 SELECT s.*, s.last_activity_at AS last_active, (
-    SELECT content FROM messages m
+    SELECT SUBSTR(content, 1, 500) FROM messages m
     WHERE m.session_id = s.id AND m.role = 'user' AND m.content IS NOT NULL
     ORDER BY m.id LIMIT 1
 ) AS preview
