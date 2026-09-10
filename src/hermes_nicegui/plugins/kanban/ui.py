@@ -321,7 +321,8 @@ def register_pages(plugin: Plugin) -> None:
                         ui.label("No tasks.").classes("text-sm opacity-60 q-pa-sm")
                     for task in current_tasks:
                         render_task_row(task)
-                    render_pager(pager, total, lambda: background_tasks.create(load_board()))
+                # render_pager must be outside the q-list (Quasar hides it there)
+                render_pager(pager, total, lambda: background_tasks.create(load_board()))
 
             def _tab_changed(e: Any) -> None:
                 pager.reset()

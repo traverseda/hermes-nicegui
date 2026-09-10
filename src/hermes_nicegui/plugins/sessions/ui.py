@@ -1006,7 +1006,8 @@ def register_pages(plugin: Plugin) -> None:
                         ui.label("No sessions.").classes("text-sm opacity-60 q-pa-sm")
                     for s in rows:
                         render_preview_row(s, unread=is_unread(s, state))
-                    render_pager(pager, total, lambda: background_tasks.create(fetch()))
+                # render_pager must be outside the q-list (Quasar hides it there)
+                render_pager(pager, total, lambda: background_tasks.create(fetch()))
 
             async def fetch() -> None:
                 nonlocal total

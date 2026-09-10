@@ -224,7 +224,8 @@ def register_pages(plugin: Plugin) -> None:
                         ui.label("No cron jobs yet.")
                     for job in jobs:
                         render_job_row(job)
-                    render_pager(pager, total, lambda: background_tasks.create(load_list()))
+                # render_pager must be outside the q-list (Quasar hides it there)
+                render_pager(pager, total, lambda: background_tasks.create(load_list()))
 
             async def _refresh() -> None:
                 pager.reset()
