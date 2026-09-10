@@ -224,7 +224,10 @@ in
         ReadWritePaths = "${hermesHome} /var/log";
         # Inherit the hermes-agent PATH (includes opencode) so recovery
         # commands work without relying on /etc/profile or a broken Path key.
-        Environment = "PATH=/run/wrappers/bin:/run/current-system/sw/bin:${pkgs.systemd}/bin:${pkgs.coreutils}/bin:${pkgs.findutils}/bin:${pkgs.gnused}/bin:${pkgs.gnugrep}/bin:${pkgs.curl}/bin:${pkgs.jq}/bin:${pkgs.opencode}/bin:${pkgs.bashInteractive}/bin:${pkgs.git}/bin:${pkgs.age}/bin";
+        # Opencode lives in the hermes user's profile (not a system package),
+        # so we must include it in the service PATH.  Running as root means
+        # /etc/profiles/per-user/hermes is NOT on PATH automatically.
+        Environment = "PATH=/etc/profiles/per-user/hermes/bin:/run/wrappers/bin:/run/current-system/sw/bin:${pkgs.systemd}/bin:${pkgs.coreutils}/bin:${pkgs.findutils}/bin:${pkgs.gnused}/bin:${pkgs.gnugrep}/bin:${pkgs.curl}/bin:${pkgs.jq}/bin:${pkgs.bashInteractive}/bin:${pkgs.git}/bin:${pkgs.age}/bin";
       };
 
       environment = {
