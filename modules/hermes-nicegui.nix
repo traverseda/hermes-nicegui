@@ -64,7 +64,15 @@ let
   # Immutable app source: the vendored submodule, fetched and pinned by the
   # hermes-nicegui-src flake input. A plain Nix store path — no runtime
   # dependency on the deploy checkout.
-  appSrc = hermes-nicegui-src;
+  # Patch: NiceGUI 3.16.0 dropped support for size=sm on ui.button(), causing
+  # the cron list action buttons (pause/resume, edit, delete) to crash silently.
+  appSrc = pkgs.runCommand "hermes-nicegui-patched" {
+    nativeBuildInputs = [ pkgs.coreutils ];
+  } ''
+    cp -r --no-preserve=mode ${hermes-nicegui-src} $out
+    sed -i 's/"flat dense size=sm"/"flat dense"/g' \
+      $out/src/hermes_nicegui/plugins/cron/ui.py
+  '';
 
   # The python environment providing hermes-nicegui's dependencies. The app
   # code itself comes from appSrc via PYTHONPATH.
