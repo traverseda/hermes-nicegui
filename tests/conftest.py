@@ -251,6 +251,12 @@ class FakeHermes:
                 con.commit()
                 con.close()
             return self._json({"session_id": sid, "status": "stopping"})
+        # Slash command endpoint
+        if method == "POST" and path.endswith("/slash"):
+            sid = path.split("/")[3]
+            body = json.loads(request.content) if request.content else {}
+            command = body.get("command", "")
+            return self._json({"output": f"Output for: {command}", "session_id": sid})
         if method == "GET" and path == "/api/jobs":
             return self._json({"jobs": self.jobs})
         if method == "POST" and path == "/api/jobs":
