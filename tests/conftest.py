@@ -318,6 +318,12 @@ class FakeHermes:
                 job["last_run_at"] = "2026-08-13T12:00:00+00:00"
                 job["last_status"] = "success"
                 return self._json({"job": job})
+        # Slash command endpoint
+        if method == "POST" and path.endswith("/slash"):
+            sid = path.split("/")[3]
+            body = json.loads(request.content) if request.content else {}
+            command = body.get("command", "")
+            return self._json({"output": f"Output for: {command}", "session_id": sid})
         return self._json({"error": {"message": f"unhandled {method} {path}"}}, status=404)
 
     def _record_turn(self, session_id: str, input_text: str) -> None:

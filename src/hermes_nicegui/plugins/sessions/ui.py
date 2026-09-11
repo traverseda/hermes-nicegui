@@ -712,6 +712,16 @@ def render_transcript_events(
                     tool_rows=tool_rows,
                 )
 
+        elif msg.role == "slash":
+            _collapsible_entry(
+                "terminal", "primary",
+                (msg.content or "").split("\n")[0].strip(),
+                msg.timestamp,
+                lambda c=msg.content: ui.code(c or "", language="text").classes("w-full"),
+                default_open=True,
+                mark="slash-output",
+            )
+
         elif msg.id not in consumed_result_ids:
             # An orphaned tool result: its call fell outside this page of
             # messages, so there was nothing to fuse it with above.
@@ -1761,7 +1771,7 @@ def register_pages(plugin: Plugin) -> None:
                         output = resp.get("output", "")
                         # Append the command output to the transcript so the user
                         # sees what the slash command returned.
-                        transcript.append({"role": "slash", "content": f"`{text}`\n\n{output}"})
+                        _append_local_message("slash", f"`{text}`\n\n{output}")
                         _render_history()
                         _scroll_to_bottom(transcript)
                     except HermesError as exc:

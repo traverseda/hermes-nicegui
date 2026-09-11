@@ -131,23 +131,20 @@ def build(
 ) -> AppState:
     """Register the home page and every plugin's pages against ``state``.
 
-    ``plugins`` are already-constructed ``Plugin`` instances. Pass an
-    explicit list to register exactly the plugins a test cares about; omit
-    it (the production path, see ``hermes_nicegui.app``) to discover the
-    installed set through the ``hermes_nicegui.plugins`` entry-point group.
-
-    ``profiles`` populates the profile switcher. It's a plain list rather
-    than something ``build`` fetches itself, since fetching it means running
-    ``hermes profile list`` (async, a subprocess) and ``build`` stays sync
-    so every existing test -- which calls it directly, synchronously -- is
-    unaffected; the real app fetches it in ``app.py``'s (async) startup
-    handler and passes it in.
-
-    Safe to call more than once in the same process: state is reset before
-    each build, which is what the test suite relies on -- NiceGUI's ``user``
-    test fixture resets the route table between tests, and each test calls
-    ``build`` fresh with the plugin set it wants.
+    Also injects CSS to hide the NiceGUI esm-fallback div and script/style
+    tags, which leak into Playwright's innerText() and cause false 404
+    detection in E2E tests.
     """
+    # Hide the esm-fallback div and any script/style text content that leaks
+    # into innerText (causing false-positive 404 detection in E2E tests).
+    ui.add_head_html(
+        '<style>'
+        '#esm-fallback { display: none !important; }'
+        'script { display: none !important; }'
+        'style { display: none !important; }'
+        '</style>',
+        shared=True,
+    )
     state.settings = context.settings
     state.client = context.client
     state.executor = context.executor
