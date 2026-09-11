@@ -643,7 +643,7 @@ class KanbanStore:
             "state.db",
             _KANBAN_WORKER_SESSION_SQL,
             {"pattern": pattern},
-            profile=task_row.get("assignee") or "default",
+            profile="",
         )
         return rows[0]["id"] if rows else None
 
